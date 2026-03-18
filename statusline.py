@@ -1,0 +1,1554 @@
+#!/usr/bin/env python3
+"""claude-code-statusline — single-file distributable.
+
+Beautiful, customizable statusline for Claude Code CLI.
+Works on Linux, macOS, and Windows (Python 3.10+).
+
+Usage:
+  python3 statusline.py          # open interactive builder (TTY)
+  python3 statusline.py --help   # list CLI options
+  echo '{}' | python3 statusline.py  # render from JSON stdin (Claude Code mode)
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import tempfile
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+
+# ── Platform-aware key reading ────────────────────────────────────
+
+if sys.platform == "win32":
+    import msvcrt
+
+    def _read_key() -> str:
+        ch = msvcrt.getwch()
+        if ch in ("\x00", "\xe0"):  # special keys (arrows, etc.)
+            ch2 = msvcrt.getwch()
+            return {"H": "up", "P": "down", "M": "right", "K": "left"}.get(ch2, "")
+        if ch == "\r":
+            return "enter"
+        if ch == "\x1b":
+            return "escape"
+        if ch == "\x03":
+            return "quit"
+        if ch == "\x08":
+            return "backspace"
+        if ch == " ":
+            return " "
+        return ch
+
+else:
+    import tty
+    import termios
+
+    def _read_key() -> str:
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            ch = sys.stdin.read(1)
+            if ch == "\x1b":
+                ch2 = sys.stdin.read(1)
+                if ch2 == "[":
+                    ch3 = sys.stdin.read(1)
+                    return {"A": "up", "B": "down", "C": "right", "D": "left"}.get(ch3, "")
+                return "escape"
+            if ch in ("\r", "\n"):
+                return "enter"
+            if ch == "\x03":
+                return "quit"
+            if ch == "\x7f":
+                return "backspace"
+            if ch == " ":
+                return " "
+            return ch
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+# ── Config directory (platform-aware) ────────────────────────────
+
+def _config_dir() -> Path:
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA", "")
+        if appdata:
+            return Path(appdata) / "claude-code-statusline"
+    return Path.home() / ".config" / "claude-code-statusline"
+
+
+CONFIG_DIR = _config_dir()
+CONFIG_FILE = CONFIG_DIR / "config.json"
+
+
+# ── ANSI constants ────────────────────────────────────────────────
+
+RESET = "\033[0m"
+DIM = "\033[2m"
+BOLD = "\033[1m"
+
+CLEAR_SCREEN = "\033[2J\033[H"
+HIDE_CURSOR = "\033[?25l"
+SHOW_CURSOR = "\033[?25h"
+ALT_SCREEN_ON = "\033[?1049h"
+ALT_SCREEN_OFF = "\033[?1049l"
+
+# Fixed UI colors (catppuccin palette, for the builder UI itself)
+P = "\033[38;2;203;166;247m"   # purple
+G = "\033[38;2;166;227;161m"   # green
+Y = "\033[38;2;249;226;175m"   # yellow
+R = "\033[38;2;243;139;168m"   # red
+M = "\033[38;2;108;112;134m"   # muted/gray
+W = "\033[38;2;205;214;244m"   # white
+C = "\033[38;2;137;180;250m"   # cyan
+
+
+def _hex_to_ansi_fg(hex_color: str) -> str:
+    r = int(hex_color[1:3], 16)
+    g = int(hex_color[3:5], 16)
+    b = int(hex_color[5:7], 16)
+    return f"\033[38;2;{r};{g};{b}m"
+
+
+# ── Themes ────────────────────────────────────────────────────────
+
+# Semantic color roles:
+#   primary   — model name, main labels
+#   secondary — purple/pink accents (tokens out, agents)
+#   accent    — blue accents (branch, context, links)
+#   info      — cyan/teal (tokens in, worktree)
+#   success   — green (cost, lines added)
+#   warning   — yellow/orange (context warning, vim mode)
+#   danger    — red (high usage, lines removed)
+#   muted     — dim text (duration, paths, separators)
+#   text      — default foreground
+
+@dataclass
+class Theme:
+    name: str
+    description: str
+    colors: dict[str, str] = field(default_factory=dict)
+
+
+THEMES: dict[str, Theme] = {
+    "tokyo-night": Theme(
+        name="tokyo-night",
+        description="Tokyo Night — cool blues and purples",
+        colors={
+            "primary":   "#c0caf5",
+            "secondary": "#bb9af7",
+            "accent":    "#7aa2f7",
+            "info":      "#7dcfff",
+            "success":   "#9ece6a",
+            "warning":   "#e0af68",
+            "danger":    "#f7768e",
+            "muted":     "#565f89",
+            "text":      "#a9b1d6",
+        },
+    ),
+    "catppuccin": Theme(
+        name="catppuccin",
+        description="Catppuccin Mocha — soft pastels",
+        colors={
+            "primary":   "#cdd6f4",
+            "secondary": "#cba6f7",
+            "accent":    "#89b4fa",
+            "info":      "#94e2d5",
+            "success":   "#a6e3a1",
+            "warning":   "#f9e2af",
+            "danger":    "#f38ba8",
+            "muted":     "#6c7086",
+            "text":      "#bac2de",
+        },
+    ),
+    "gruvbox": Theme(
+        name="gruvbox",
+        description="Gruvbox Dark — warm retro",
+        colors={
+            "primary":   "#ebdbb2",
+            "secondary": "#d3869b",
+            "accent":    "#83a598",
+            "info":      "#8ec07c",
+            "success":   "#b8bb26",
+            "warning":   "#fabd2f",
+            "danger":    "#fb4934",
+            "muted":     "#928374",
+            "text":      "#d5c4a1",
+        },
+    ),
+    "nord": Theme(
+        name="nord",
+        description="Nord — arctic cool blues",
+        colors={
+            "primary":   "#eceff4",
+            "secondary": "#b48ead",
+            "accent":    "#5e81ac",
+            "info":      "#88c0d0",
+            "success":   "#a3be8c",
+            "warning":   "#ebcb8b",
+            "danger":    "#bf616a",
+            "muted":     "#4c566a",
+            "text":      "#d8dee9",
+        },
+    ),
+    "dracula": Theme(
+        name="dracula",
+        description="Dracula — vibrant dark",
+        colors={
+            "primary":   "#f8f8f2",
+            "secondary": "#ff79c6",
+            "accent":    "#bd93f9",
+            "info":      "#8be9fd",
+            "success":   "#50fa7b",
+            "warning":   "#f1fa8c",
+            "danger":    "#ff5555",
+            "muted":     "#6272a4",
+            "text":      "#f8f8f2",
+        },
+    ),
+    "rose-pine": Theme(
+        name="rose-pine",
+        description="Rosé Pine — elegant muted rose",
+        colors={
+            "primary":   "#e0def4",
+            "secondary": "#c4a7e7",
+            "accent":    "#31748f",
+            "info":      "#9ccfd8",
+            "success":   "#31748f",
+            "warning":   "#f6c177",
+            "danger":    "#eb6f92",
+            "muted":     "#6e6a86",
+            "text":      "#e0def4",
+        },
+    ),
+    "warm": Theme(
+        name="warm",
+        description="Warm — earthy tones like allthingsclaude/bar",
+        colors={
+            "primary":   "#d4a574",
+            "secondary": "#c4956a",
+            "accent":    "#b8956a",
+            "info":      "#a8b89a",
+            "success":   "#8faa7a",
+            "warning":   "#d4a040",
+            "danger":    "#c47070",
+            "muted":     "#7a7a6a",
+            "text":      "#c0b8a8",
+        },
+    ),
+}
+
+
+# ── Config dataclasses ────────────────────────────────────────────
+
+@dataclass
+class WidgetConfig:
+    id: str
+    fg: str | None = None  # None = use theme color
+
+
+@dataclass
+class LineConfig:
+    widgets: list[WidgetConfig] = field(default_factory=list)
+
+
+@dataclass
+class StatuslineConfig:
+    theme: str = "catppuccin"
+    lines: list[LineConfig] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not self.lines:
+            self.lines = default_layout()
+
+
+def default_layout() -> list[LineConfig]:
+    """Clean 4-line layout inspired by allthingsclaude/bar."""
+    return [
+        LineConfig(widgets=[
+            WidgetConfig("model_name"),
+            WidgetConfig("context_usage"),
+        ]),
+        LineConfig(widgets=[
+            WidgetConfig("session_usage"),
+        ]),
+        LineConfig(widgets=[
+            WidgetConfig("session_cost"),
+            WidgetConfig("session_duration"),
+            WidgetConfig("lines_changed"),
+        ]),
+        LineConfig(widgets=[
+            WidgetConfig("directory"),
+        ]),
+    ]
+
+
+def load_config() -> StatuslineConfig:
+    if not CONFIG_FILE.exists():
+        return StatuslineConfig()
+    try:
+        raw = json.loads(CONFIG_FILE.read_text())
+        lines = []
+        for line_data in raw.get("lines", []):
+            widgets = [WidgetConfig(**w) for w in line_data.get("widgets", [])]
+            lines.append(LineConfig(widgets=widgets))
+        return StatuslineConfig(
+            theme=raw.get("theme", "catppuccin"),
+            lines=lines if lines else default_layout(),
+        )
+    except (json.JSONDecodeError, TypeError, KeyError):
+        return StatuslineConfig()
+
+
+def save_config(config: StatuslineConfig) -> None:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    data = {
+        "theme": config.theme,
+        "lines": [
+            {"widgets": [_widget_to_dict(w) for w in line.widgets]}
+            for line in config.lines
+        ],
+    }
+    CONFIG_FILE.write_text(json.dumps(data, indent=2) + "\n")
+
+
+def _widget_to_dict(w: WidgetConfig) -> dict:
+    d: dict = {"id": w.id}
+    if w.fg:
+        d["fg"] = w.fg
+    return d
+
+
+def install_to_claude(command: str = "") -> None:
+    """Write statusLine config to ~/.claude/settings.json."""
+    settings_path = Path.home() / ".claude" / "settings.json"
+
+    if not command:
+        install_dir = Path.home() / ".claude-statusline"
+        if sys.platform == "win32":
+            script = install_dir / "statusline.py"
+            command = f'python "{script}"'
+        else:
+            script = install_dir / "statusline.py"
+            command = f"python3 {script}"
+
+    if settings_path.exists():
+        try:
+            settings = json.loads(settings_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            settings = {}
+    else:
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings = {}
+
+    settings["statusLine"] = {
+        "type": "command",
+        "command": command,
+        "padding": 0,
+    }
+    settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+
+
+# ── Usage API fetcher + cache ─────────────────────────────────────
+
+USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+CACHE_TTL = 120  # seconds — avoid rate limiting
+CACHE_FILE = Path(tempfile.gettempdir()) / "claude-statusline-usage-cache.json"
+
+
+@dataclass
+class UsageWindow:
+    utilization_pct: int   # 0-100
+    reset_seconds: int     # seconds until reset
+
+
+@dataclass
+class UsageData:
+    five_hour: UsageWindow | None
+    seven_day: UsageWindow | None
+
+
+def get_usage() -> UsageData | None:
+    """Get usage data, from cache or API. Falls back to stale cache on errors."""
+    cached = _read_cache()
+    if cached is not None:
+        return cached
+
+    token = _resolve_token()
+    if not token:
+        return _read_cache(ignore_ttl=True)
+
+    try:
+        data = _fetch_usage(token)
+        if data:
+            _write_cache(data)
+            return data
+    except Exception:
+        pass
+
+    return _read_cache(ignore_ttl=True)
+
+
+def _resolve_token() -> str | None:
+    """Find OAuth token from available sources."""
+    token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+    if token:
+        return token
+
+    creds_path = Path.home() / ".claude" / ".credentials.json"
+    if creds_path.exists():
+        try:
+            creds = json.loads(creds_path.read_text())
+            token = creds.get("claudeAiOauth", {}).get("accessToken")
+            if token:
+                return token
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    bar_path = Path.home() / ".bar" / "tokens.json"
+    if bar_path.exists():
+        try:
+            tokens = json.loads(bar_path.read_text())
+            token = tokens.get("access_token")
+            if token:
+                return token
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    return None
+
+
+def _fetch_usage(token: str) -> UsageData | None:
+    """Call Anthropic usage API."""
+    req = Request(USAGE_URL)
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("anthropic-beta", "oauth-2025-04-20")
+    req.add_header("User-Agent", "claude-code-statusline/0.1.0")
+
+    try:
+        with urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+    except (HTTPError, URLError, json.JSONDecodeError, TimeoutError):
+        return None
+
+    return _parse_usage_response(data)
+
+
+def _parse_usage_response(data: dict) -> UsageData:
+    five_hour = _parse_usage_window(data.get("five_hour") or data.get("fiveHour"))
+    seven_day = _parse_usage_window(data.get("seven_day") or data.get("sevenDay"))
+    return UsageData(five_hour=five_hour, seven_day=seven_day)
+
+
+def _parse_usage_window(window: dict | None) -> UsageWindow | None:
+    if not window:
+        return None
+    util = window.get("utilization", 0)
+    pct = round(util) if isinstance(util, (int, float)) else 0
+    reset_at = window.get("resets_at") or window.get("resetAt")
+    reset_secs = _time_until(reset_at) if reset_at else 0
+    return UsageWindow(utilization_pct=pct, reset_seconds=reset_secs)
+
+
+def _time_until(iso_timestamp: str) -> int:
+    """Seconds until a given ISO timestamp."""
+    try:
+        target = datetime.fromisoformat(iso_timestamp.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        diff = (target - now).total_seconds()
+        return max(0, int(diff))
+    except (ValueError, TypeError):
+        return 0
+
+
+def _format_countdown(seconds: int) -> str:
+    """Format seconds into human-readable countdown."""
+    if seconds <= 0:
+        return "now"
+    hours = seconds // 3600
+    mins = (seconds % 3600) // 60
+    if hours > 24:
+        days = hours // 24
+        remaining_hours = hours % 24
+        return f"{days}d {remaining_hours}h"
+    if hours > 0:
+        return f"{hours}h {mins:02d}m"
+    return f"{mins}m"
+
+
+def _read_cache(ignore_ttl: bool = False) -> UsageData | None:
+    if not CACHE_FILE.exists():
+        return None
+    try:
+        raw = json.loads(CACHE_FILE.read_text())
+        if not ignore_ttl and time.time() - raw.get("_ts", 0) > CACHE_TTL:
+            return None
+        return UsageData(
+            five_hour=UsageWindow(**raw["five_hour"]) if raw.get("five_hour") else None,
+            seven_day=UsageWindow(**raw["seven_day"]) if raw.get("seven_day") else None,
+        )
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return None
+
+
+def _write_cache(data: UsageData) -> None:
+    try:
+        raw = {
+            "_ts": time.time(),
+            "five_hour": {
+                "utilization_pct": data.five_hour.utilization_pct,
+                "reset_seconds": data.five_hour.reset_seconds,
+            } if data.five_hour else None,
+            "seven_day": {
+                "utilization_pct": data.seven_day.utilization_pct,
+                "reset_seconds": data.seven_day.reset_seconds,
+            } if data.seven_day else None,
+        }
+        CACHE_FILE.write_text(json.dumps(raw))
+    except OSError:
+        pass
+
+
+# ── Widget registry ───────────────────────────────────────────────
+
+@dataclass
+class WidgetDef:
+    id: str
+    label: str
+    category: str
+    description: str
+
+
+WIDGET_CATALOG: list[WidgetDef] = [
+    # Model / Session
+    WidgetDef("model_name",       "Model Name",      "model",     "Opus 4.6 (1M)"),
+    WidgetDef("model_id",         "Model ID",        "model",     "claude-opus-4-6"),
+    WidgetDef("session_cost",     "Session Cost",    "model",     "$3.47"),
+    WidgetDef("session_duration", "Duration",        "model",     "2h 00m"),
+    WidgetDef("version",          "CC Version",      "model",     "v2.1.78"),
+    WidgetDef("session_id",       "Session ID",      "model",     "abc123 (short)"),
+
+    # Context
+    WidgetDef("context_usage",    "Context Usage",   "context",   "87k/1.0M [bar] 42%"),
+    WidgetDef("context_percent",  "Context %",       "context",   "42%"),
+    WidgetDef("context_bar",      "Context Bar",     "context",   "[████░░░░░░]"),
+    WidgetDef("context_remaining","Ctx Remaining",   "context",   "58% free"),
+    WidgetDef("tokens_in",        "Tokens In",       "context",   "87k in"),
+    WidgetDef("tokens_out",       "Tokens Out",      "context",   "12k out"),
+    WidgetDef("tokens_total",     "Tokens Total",    "context",   "99k total"),
+    WidgetDef("tokens_cache",     "Cache Tokens",    "context",   "5k created, 2k read"),
+    WidgetDef("context_warning",  "Ctx Warning",     "context",   "! HIGH (80%+)"),
+
+    # Code
+    WidgetDef("lines_changed",    "Lines Changed",   "code",      "+245 -89"),
+    WidgetDef("lines_added",      "Lines Added",     "code",      "+245"),
+    WidgetDef("lines_removed",    "Lines Removed",   "code",      "-89"),
+
+    # Workspace
+    WidgetDef("directory",        "Directory",       "workspace", "~/projetos/app/src"),
+    WidgetDef("project_dir",      "Project Dir",     "workspace", "~/projetos/app"),
+
+    # Git / Worktree
+    WidgetDef("git_branch",       "Git Branch",      "git",       "feat/login"),
+    WidgetDef("worktree_name",    "Worktree Name",   "git",       "feat-login"),
+    WidgetDef("worktree_branch",  "Worktree Branch", "git",       "worktree-feat-login"),
+    WidgetDef("original_branch",  "Original Branch", "git",       "main"),
+
+    # Usage (API — 5h session + 7d weekly limits)
+    WidgetDef("session_usage",    "Session Usage",   "usage",     "Session [bar] 19% resets 4h"),
+    WidgetDef("session_pct",      "Session %",       "usage",     "19%"),
+    WidgetDef("session_bar",      "Session Bar",     "usage",     "[██░░░░░░░░]"),
+    WidgetDef("session_reset",    "Session Reset",   "usage",     "resets 4h 31m"),
+    WidgetDef("weekly_usage",     "Weekly Usage",    "usage",     "Weekly [bar] 42% resets 47h"),
+    WidgetDef("weekly_pct",       "Weekly %",        "usage",     "42%"),
+    WidgetDef("weekly_bar",       "Weekly Bar",      "usage",     "[████░░░░░░]"),
+    WidgetDef("weekly_reset",     "Weekly Reset",    "usage",     "resets 2d 5h"),
+
+    # State
+    WidgetDef("vim_mode",         "Vim Mode",        "state",     "NORMAL / INSERT"),
+    WidgetDef("agent_name",       "Agent Name",      "state",     "security-reviewer"),
+    WidgetDef("exceeds_200k",     "200k+ Warning",   "state",     "! when >200k tokens"),
+]
+
+WIDGET_MAP: dict[str, WidgetDef] = {w.id: w for w in WIDGET_CATALOG}
+CATEGORIES = ["model", "context", "usage", "code", "workspace", "git", "state"]
+
+
+# ── Formatting helpers ────────────────────────────────────────────
+
+def _shorten_path(path: str) -> str:
+    if not path:
+        return ""
+    # Normalize to forward slashes for display
+    display = path.replace("\\", "/")
+    parts = display.rstrip("/").split("/")
+    if len(parts) > 2 and parts[1] == "home":
+        home = f"/home/{parts[2]}"
+        if display.startswith(home):
+            return "~" + display[len(home):]
+    # Windows: C:/Users/<user> → ~
+    if sys.platform == "win32":
+        home_str = str(Path.home()).replace("\\", "/")
+        if display.startswith(home_str):
+            return "~" + display[len(home_str):]
+    return display
+
+
+def _format_duration(ms: float | None) -> str:
+    if not ms:
+        return "0m"
+    total_secs = int(ms / 1000)
+    hours = total_secs // 3600
+    mins = (total_secs % 3600) // 60
+    if hours > 0:
+        return f"{hours}h {mins:02d}m"
+    return f"{mins}m"
+
+
+def _format_tokens(n: int | None) -> str:
+    if not n:
+        return "0"
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.0f}k"
+    return str(n)
+
+
+def _progress_bar(pct: float | None, width: int = 10) -> str:
+    if pct is None:
+        pct = 0
+    pct = min(100, max(0, pct))
+    filled = round(pct / 100 * width)
+    empty = width - filled
+    return "\u2588" * filled + "\u2591" * empty
+
+
+def _pct_color(pct: float | None, theme: Theme) -> str:
+    if pct is None:
+        pct = 0
+    if pct >= 80:
+        return theme.colors.get("danger", "#f38ba8")
+    if pct >= 60:
+        return theme.colors.get("warning", "#f9e2af")
+    return theme.colors.get("accent", "#89b4fa")
+
+
+def _safe_get(data: dict, *keys: str):
+    current = data
+    for k in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(k)
+    return current
+
+
+# ── Per-render usage cache ────────────────────────────────────────
+
+_usage_cache: UsageData | None = None
+
+
+def _get_usage_data(data: dict) -> UsageData | None:
+    global _usage_cache
+    if _usage_cache is not None:
+        return _usage_cache
+    try:
+        _usage_cache = get_usage()
+    except Exception:
+        _usage_cache = None
+    return _usage_cache
+
+
+def reset_usage_cache() -> None:
+    global _usage_cache
+    _usage_cache = None
+
+
+# ── Widget formatters ─────────────────────────────────────────────
+
+def format_widget(widget_id: str, data: dict, theme: Theme, fg_override: str | None = None) -> str | None:
+    """Return formatted ANSI string for a widget, or None if data unavailable."""
+    result = _format_widget_inner(widget_id, data, theme)
+    if result is None:
+        return None
+    if fg_override:
+        import re
+        fg_code = _hex_to_ansi_fg(fg_override)
+        result = re.sub(r'\033\[38;2;\d+;\d+;\d+m', fg_code, result)
+        result = result.replace(RESET, RESET + fg_code)
+        return f"{fg_code}{result}{RESET}"
+    return result
+
+
+def _format_widget_inner(widget_id: str, data: dict, theme: Theme) -> str | None:
+    """Internal: format without fg_override."""
+    w = WIDGET_MAP.get(widget_id)
+    if not w:
+        return None
+
+    match widget_id:
+        # ── Model / Session ──────────────────────────────
+        case "model_name":
+            name = _safe_get(data, "model", "display_name")
+            if not name:
+                return None
+            model_id = _safe_get(data, "model", "id") or ""
+            ctx_size = _safe_get(data, "context_window", "context_window_size") or 0
+            if "1m" in model_id.lower() or ctx_size >= 1_000_000:
+                name += " (1M)"
+            color = theme.colors.get("primary", "#c0caf5")
+            return f"{BOLD}{_hex_to_ansi_fg(color)}{name}{RESET}"
+
+        case "model_id":
+            mid = _safe_get(data, "model", "id")
+            if not mid:
+                return None
+            color = theme.colors.get("muted", "#6c7086")
+            return f"{_hex_to_ansi_fg(color)}{mid}{RESET}"
+
+        case "session_cost":
+            cost = _safe_get(data, "cost", "total_cost_usd")
+            val = f"${cost:.2f}" if cost else "$0.00"
+            color = theme.colors.get("success", "#a6e3a1")
+            return f"{_hex_to_ansi_fg(color)}{val}{RESET}"
+
+        case "session_duration":
+            ms = _safe_get(data, "cost", "total_duration_ms")
+            color = theme.colors.get("muted", "#6c7086")
+            return f"{_hex_to_ansi_fg(color)}{_format_duration(ms)}{RESET}"
+
+        case "version":
+            v = data.get("version")
+            if not v:
+                return None
+            color = theme.colors.get("muted", "#6c7086")
+            return f"{_hex_to_ansi_fg(color)}v{v}{RESET}"
+
+        case "session_id":
+            sid = data.get("session_id")
+            if not sid:
+                return None
+            color = theme.colors.get("muted", "#6c7086")
+            short = sid[:8] if len(sid) > 8 else sid
+            return f"{_hex_to_ansi_fg(color)}{short}{RESET}"
+
+        # ── Context ──────────────────────────────────────
+        case "context_usage":
+            pct = _safe_get(data, "context_window", "used_percentage")
+            total_in = _safe_get(data, "context_window", "total_input_tokens") or 0
+            ctx_size = _safe_get(data, "context_window", "context_window_size") or 0
+            bar_color = _pct_color(pct, theme)
+            muted = theme.colors.get("muted", "#6c7086")
+            pct_val = pct if pct is not None else 0
+            bar = _progress_bar(pct_val)
+            return (
+                f"{_hex_to_ansi_fg(muted)}{_format_tokens(total_in)}/{_format_tokens(ctx_size)}"
+                f" {_hex_to_ansi_fg(bar_color)}[{bar}]"
+                f" {BOLD}{pct_val}%{RESET}"
+            )
+
+        case "context_percent":
+            pct = _safe_get(data, "context_window", "used_percentage")
+            pct_val = pct if pct is not None else 0
+            color = _pct_color(pct, theme)
+            return f"{_hex_to_ansi_fg(color)}{pct_val}%{RESET}"
+
+        case "context_bar":
+            pct = _safe_get(data, "context_window", "used_percentage")
+            color = _pct_color(pct, theme)
+            return f"{_hex_to_ansi_fg(color)}[{_progress_bar(pct)}]{RESET}"
+
+        case "context_remaining":
+            pct = _safe_get(data, "context_window", "remaining_percentage")
+            if pct is None:
+                used = _safe_get(data, "context_window", "used_percentage")
+                pct = (100 - used) if used is not None else 0
+            color = theme.colors.get("info", "#89b4fa")
+            return f"{_hex_to_ansi_fg(color)}{pct}% free{RESET}"
+
+        case "tokens_in":
+            t = _safe_get(data, "context_window", "total_input_tokens")
+            color = theme.colors.get("info", "#89b4fa")
+            return f"{_hex_to_ansi_fg(color)}{_format_tokens(t)} in{RESET}"
+
+        case "tokens_out":
+            t = _safe_get(data, "context_window", "total_output_tokens")
+            color = theme.colors.get("secondary", "#cba6f7")
+            return f"{_hex_to_ansi_fg(color)}{_format_tokens(t)} out{RESET}"
+
+        case "tokens_total":
+            t_in = _safe_get(data, "context_window", "total_input_tokens") or 0
+            t_out = _safe_get(data, "context_window", "total_output_tokens") or 0
+            color = theme.colors.get("text", "#bac2de")
+            return f"{_hex_to_ansi_fg(color)}{_format_tokens(t_in + t_out)} total{RESET}"
+
+        case "tokens_cache":
+            created = _safe_get(data, "context_window", "current_usage", "cache_creation_input_tokens") or 0
+            read = _safe_get(data, "context_window", "current_usage", "cache_read_input_tokens") or 0
+            if not created and not read:
+                return None
+            muted = theme.colors.get("muted", "#6c7086")
+            parts = []
+            if created:
+                parts.append(f"{_format_tokens(created)} cached")
+            if read:
+                parts.append(f"{_format_tokens(read)} hit")
+            return f"{_hex_to_ansi_fg(muted)}{', '.join(parts)}{RESET}"
+
+        case "context_warning":
+            pct = _safe_get(data, "context_window", "used_percentage")
+            if pct is None or pct < 80:
+                return None
+            color = theme.colors.get("danger", "#f38ba8")
+            if pct >= 95:
+                return f"{BOLD}{_hex_to_ansi_fg(color)}!! CRITICAL {pct}%{RESET}"
+            return f"{BOLD}{_hex_to_ansi_fg(color)}! HIGH {pct}%{RESET}"
+
+        # ── Code ─────────────────────────────────────────
+        case "lines_changed":
+            added = _safe_get(data, "cost", "total_lines_added") or 0
+            removed = _safe_get(data, "cost", "total_lines_removed") or 0
+            c_add = theme.colors.get("success", "#a6e3a1")
+            c_rem = theme.colors.get("danger", "#f38ba8")
+            return f"{_hex_to_ansi_fg(c_add)}+{added}{RESET} {_hex_to_ansi_fg(c_rem)}-{removed}{RESET}"
+
+        case "lines_added":
+            n = _safe_get(data, "cost", "total_lines_added") or 0
+            color = theme.colors.get("success", "#a6e3a1")
+            return f"{_hex_to_ansi_fg(color)}+{n}{RESET}"
+
+        case "lines_removed":
+            n = _safe_get(data, "cost", "total_lines_removed") or 0
+            color = theme.colors.get("danger", "#f38ba8")
+            return f"{_hex_to_ansi_fg(color)}-{n}{RESET}"
+
+        # ── Workspace ────────────────────────────────────
+        case "directory":
+            d = data.get("cwd") or _safe_get(data, "workspace", "current_dir")
+            if not d:
+                return None
+            color = theme.colors.get("muted", "#6c7086")
+            return f"{_hex_to_ansi_fg(color)}{_shorten_path(d)}{RESET}"
+
+        case "project_dir":
+            d = _safe_get(data, "workspace", "project_dir")
+            if not d:
+                return None
+            color = theme.colors.get("muted", "#6c7086")
+            return f"{_hex_to_ansi_fg(color)}{_shorten_path(d)}{RESET}"
+
+        # ── Git / Worktree ───────────────────────────────
+        case "git_branch":
+            branch = (
+                _safe_get(data, "worktree", "branch")
+                or _safe_get(data, "worktree", "original_branch")
+            )
+            if not branch:
+                return None
+            color = theme.colors.get("accent", "#89b4fa")
+            return f"{_hex_to_ansi_fg(color)}{branch}{RESET}"
+
+        case "worktree_name":
+            name = _safe_get(data, "worktree", "name")
+            if not name:
+                return None
+            color = theme.colors.get("info", "#89b4fa")
+            return f"{_hex_to_ansi_fg(color)}{name}{RESET}"
+
+        case "worktree_branch":
+            branch = _safe_get(data, "worktree", "branch")
+            if not branch:
+                return None
+            color = theme.colors.get("info", "#89b4fa")
+            return f"{_hex_to_ansi_fg(color)}{branch}{RESET}"
+
+        case "original_branch":
+            branch = _safe_get(data, "worktree", "original_branch")
+            if not branch:
+                return None
+            color = theme.colors.get("muted", "#6c7086")
+            return f"{_hex_to_ansi_fg(color)}{branch}{RESET}"
+
+        # ── Usage (API data) ─────────────────────────────
+        case "session_usage":
+            usage = _get_usage_data(data)
+            if not usage or not usage.five_hour:
+                return None
+            u = usage.five_hour
+            bar_color = _pct_color(u.utilization_pct, theme)
+            muted = theme.colors.get("muted", "#6c7086")
+            primary = theme.colors.get("primary", "#c0caf5")
+            bar = _progress_bar(u.utilization_pct)
+            reset = _format_countdown(u.reset_seconds)
+            return (
+                f"{BOLD}{_hex_to_ansi_fg(primary)}Session{RESET}"
+                f" {_hex_to_ansi_fg(bar_color)}[{bar}] {BOLD}{u.utilization_pct}%{RESET}"
+                f" {_hex_to_ansi_fg(muted)}resets {reset}{RESET}"
+            )
+
+        case "session_pct":
+            usage = _get_usage_data(data)
+            if not usage or not usage.five_hour:
+                return None
+            color = _pct_color(usage.five_hour.utilization_pct, theme)
+            return f"{_hex_to_ansi_fg(color)}{usage.five_hour.utilization_pct}%{RESET}"
+
+        case "session_bar":
+            usage = _get_usage_data(data)
+            if not usage or not usage.five_hour:
+                return None
+            color = _pct_color(usage.five_hour.utilization_pct, theme)
+            return f"{_hex_to_ansi_fg(color)}[{_progress_bar(usage.five_hour.utilization_pct)}]{RESET}"
+
+        case "session_reset":
+            usage = _get_usage_data(data)
+            if not usage or not usage.five_hour:
+                return None
+            muted = theme.colors.get("muted", "#6c7086")
+            return f"{_hex_to_ansi_fg(muted)}resets {_format_countdown(usage.five_hour.reset_seconds)}{RESET}"
+
+        case "weekly_usage":
+            usage = _get_usage_data(data)
+            if not usage or not usage.seven_day:
+                return None
+            u = usage.seven_day
+            bar_color = _pct_color(u.utilization_pct, theme)
+            muted = theme.colors.get("muted", "#6c7086")
+            primary = theme.colors.get("primary", "#c0caf5")
+            bar = _progress_bar(u.utilization_pct)
+            reset = _format_countdown(u.reset_seconds)
+            return (
+                f"{BOLD}{_hex_to_ansi_fg(primary)}Weekly{RESET}"
+                f" {_hex_to_ansi_fg(bar_color)}[{bar}] {BOLD}{u.utilization_pct}%{RESET}"
+                f" {_hex_to_ansi_fg(muted)}resets {reset}{RESET}"
+            )
+
+        case "weekly_pct":
+            usage = _get_usage_data(data)
+            if not usage or not usage.seven_day:
+                return None
+            color = _pct_color(usage.seven_day.utilization_pct, theme)
+            return f"{_hex_to_ansi_fg(color)}{usage.seven_day.utilization_pct}%{RESET}"
+
+        case "weekly_bar":
+            usage = _get_usage_data(data)
+            if not usage or not usage.seven_day:
+                return None
+            color = _pct_color(usage.seven_day.utilization_pct, theme)
+            return f"{_hex_to_ansi_fg(color)}[{_progress_bar(usage.seven_day.utilization_pct)}]{RESET}"
+
+        case "weekly_reset":
+            usage = _get_usage_data(data)
+            if not usage or not usage.seven_day:
+                return None
+            muted = theme.colors.get("muted", "#6c7086")
+            return f"{_hex_to_ansi_fg(muted)}resets {_format_countdown(usage.seven_day.reset_seconds)}{RESET}"
+
+        # ── State ────────────────────────────────────────
+        case "vim_mode":
+            mode = _safe_get(data, "vim", "mode")
+            if not mode:
+                return None
+            color = theme.colors.get("warning", "#f9e2af")
+            return f"{BOLD}{_hex_to_ansi_fg(color)}{mode}{RESET}"
+
+        case "agent_name":
+            name = _safe_get(data, "agent", "name")
+            if not name:
+                return None
+            color = theme.colors.get("secondary", "#cba6f7")
+            return f"{_hex_to_ansi_fg(color)}{name}{RESET}"
+
+        case "exceeds_200k":
+            exceeds = data.get("exceeds_200k_tokens")
+            if not exceeds:
+                return None
+            color = theme.colors.get("warning", "#f9e2af")
+            return f"{BOLD}{_hex_to_ansi_fg(color)}200k+{RESET}"
+
+    return None
+
+
+# ── Renderer ──────────────────────────────────────────────────────
+
+def render(data: dict) -> str:
+    """Read config, render all lines as ANSI string."""
+    reset_usage_cache()
+    config = load_config()
+    theme = THEMES.get(config.theme, THEMES["tokyo-night"])
+    sep = f" {RESET}\033[2m│\033[22m "
+
+    output_lines: list[str] = []
+    for line_cfg in config.lines:
+        segments: list[str] = []
+        for wc in line_cfg.widgets:
+            text = format_widget(wc.id, data, theme, fg_override=wc.fg)
+            if text is None:
+                continue
+            segments.append(text)
+        if segments:
+            output_lines.append(sep.join(segments) + RESET)
+
+    return "\n".join(output_lines)
+
+
+# ── Interactive builder ───────────────────────────────────────────
+
+SAMPLE_PAYLOAD = {
+    "model": {"id": "claude-opus-4-6[1m]", "display_name": "Opus 4.6"},
+    "version": "2.1.78",
+    "session_id": "a1b2c3d4e5f6a7b8",
+    "exceeds_200k_tokens": False,
+    "cwd": "/home/user/projetos/my-project/src",
+    "workspace": {
+        "current_dir": "/home/user/projetos/my-project/src",
+        "project_dir": "/home/user/projetos/my-project",
+    },
+    "cost": {
+        "total_cost_usd": 3.47,
+        "total_duration_ms": 7200000,
+        "total_lines_added": 245,
+        "total_lines_removed": 89,
+    },
+    "context_window": {
+        "total_input_tokens": 87000,
+        "total_output_tokens": 12000,
+        "context_window_size": 1000000,
+        "used_percentage": 42,
+        "remaining_percentage": 58,
+        "current_usage": {
+            "input_tokens": 87000,
+            "output_tokens": 12000,
+            "cache_creation_input_tokens": 15000,
+            "cache_read_input_tokens": 8000,
+        },
+    },
+    "vim": {"mode": "NORMAL"},
+    "agent": {"name": "frontend-dev"},
+    "worktree": {"name": "feat-login", "branch": "feat/login", "original_branch": "main"},
+}
+
+
+def render_preview(
+    config: StatuslineConfig,
+    phantom_widget: str | None = None,
+    phantom_line: int = -1,
+) -> str:
+    """Render preview with optional phantom widget (dim, not yet added)."""
+    theme = THEMES.get(config.theme, THEMES["catppuccin"])
+    sep = f" {RESET}\033[2m|\033[22m "
+    output_lines: list[str] = []
+
+    for li, line_cfg in enumerate(config.lines):
+        segments: list[str] = []
+        for wc in line_cfg.widgets:
+            text = format_widget(wc.id, SAMPLE_PAYLOAD, theme, fg_override=wc.fg)
+            if text is not None:
+                segments.append(text)
+
+        if phantom_widget and li == phantom_line:
+            text = format_widget(phantom_widget, SAMPLE_PAYLOAD, theme)
+            if text is not None:
+                segments.append(f"\033[2m{text}\033[22m")
+
+        if segments:
+            output_lines.append(sep.join(segments) + RESET)
+        else:
+            output_lines.append(f"{DIM}(empty){RESET}")
+
+    return "\n".join(output_lines) if output_lines else f"{DIM}(no lines){RESET}"
+
+
+def _render_line_inline(config: StatuslineConfig, line_idx: int) -> str:
+    theme = THEMES.get(config.theme, THEMES["catppuccin"])
+    sep = f" {RESET}{M}|{RESET} "
+    segments = []
+    for wc in config.lines[line_idx].widgets:
+        text = format_widget(wc.id, SAMPLE_PAYLOAD, theme, fg_override=wc.fg)
+        if text is not None:
+            segments.append(text)
+    return sep.join(segments) + RESET if segments else f"{DIM}(empty){RESET}"
+
+
+# Builder modes
+MODE_LINES = "lines"
+MODE_ADDING = "adding"
+MODE_EDITING = "editing"
+MODE_CONFIRM = "confirm"
+
+
+class Builder:
+    def __init__(self) -> None:
+        self.config = load_config()
+        self.line_cursor = 0
+        self.mode = MODE_LINES
+        self.widget_cursor = 0
+        self.add_cursor = 0
+        self.add_list: list = []
+        self.message = ""
+        self.dirty = False
+
+    def run(self) -> None:
+        if not sys.stdin.isatty():
+            print("Error: interactive mode requires a terminal (TTY)")
+            return
+
+        sys.stdout.write(ALT_SCREEN_ON + HIDE_CURSOR)
+        sys.stdout.flush()
+        try:
+            self._draw()
+            while True:
+                key = _read_key()
+                if self._handle(key):
+                    break
+                self._draw()
+        except Exception as e:
+            sys.stdout.write(SHOW_CURSOR + ALT_SCREEN_OFF)
+            sys.stdout.flush()
+            print(f"Error: {e}")
+            raise
+        finally:
+            sys.stdout.write(SHOW_CURSOR + ALT_SCREEN_OFF)
+            sys.stdout.flush()
+
+    def _handle(self, key: str) -> bool:
+        self.message = ""
+
+        if self.mode == MODE_CONFIRM:
+            if key in ("q", "escape"):
+                return True
+            if key == "s":
+                save_config(self.config)
+                self.dirty = False
+                self.message = f"{G}Saved!{RESET}"
+                self.mode = MODE_LINES
+            return False
+
+        if self.mode == MODE_LINES:
+            return self._h_lines(key)
+        if self.mode == MODE_ADDING:
+            self._h_adding(key)
+            return False
+        if self.mode == MODE_EDITING:
+            self._h_editing(key)
+            return False
+        return False
+
+    def _h_lines(self, key: str) -> bool:
+        if key in ("q", "escape"):
+            if self.dirty:
+                self.message = f"{Y}Unsaved changes! s=save, q=discard{RESET}"
+                self.mode = MODE_CONFIRM
+                return False
+            return True
+        if key == "up" and self.config.lines:
+            self.line_cursor = (self.line_cursor - 1) % len(self.config.lines)
+        elif key == "down" and self.config.lines:
+            self.line_cursor = (self.line_cursor + 1) % len(self.config.lines)
+        elif key in ("left", "right"):
+            names = list(THEMES.keys())
+            idx = names.index(self.config.theme) if self.config.theme in names else 0
+            delta = 1 if key == "right" else -1
+            self.config.theme = names[(idx + delta) % len(names)]
+            self.dirty = True
+        elif key == "enter" and self.config.lines:
+            widgets = self.config.lines[self.line_cursor].widgets
+            self.widget_cursor = len(widgets) - 1 if widgets else 0
+            self.mode = MODE_EDITING
+        elif key == "a":
+            self._enter_add_mode()
+        elif key == "n":
+            self.config.lines.append(LineConfig())
+            self.line_cursor = len(self.config.lines) - 1
+            self.dirty = True
+            self.message = f"{G}Line {len(self.config.lines)} added{RESET}"
+        elif key == "x" and self.config.lines:
+            self.config.lines.pop(self.line_cursor)
+            self.line_cursor = max(0, min(self.line_cursor, len(self.config.lines) - 1))
+            self.dirty = True
+            self.message = f"{R}Line removed{RESET}"
+        elif key == "s":
+            save_config(self.config)
+            self.dirty = False
+            self.message = f"{G}Config saved!{RESET}"
+        elif key == "i":
+            save_config(self.config)
+            install_to_claude()
+            self.dirty = False
+            self.message = f"{G}Saved & installed to Claude Code!{RESET}"
+        return False
+
+    def _h_editing(self, key: str) -> None:
+        widgets = self.config.lines[self.line_cursor].widgets
+        if key in ("escape", "q"):
+            self.mode = MODE_LINES
+        elif key == "up" and widgets:
+            self.widget_cursor = (self.widget_cursor - 1) % len(widgets)
+        elif key == "down" and widgets:
+            self.widget_cursor = (self.widget_cursor + 1) % len(widgets)
+        elif key == "left" and widgets and self.widget_cursor > 0:
+            i = self.widget_cursor
+            widgets[i], widgets[i - 1] = widgets[i - 1], widgets[i]
+            self.widget_cursor -= 1
+            self.dirty = True
+        elif key == "right" and widgets and self.widget_cursor < len(widgets) - 1:
+            i = self.widget_cursor
+            widgets[i], widgets[i + 1] = widgets[i + 1], widgets[i]
+            self.widget_cursor += 1
+            self.dirty = True
+        elif key in ("d", "backspace", "x") and widgets:
+            removed = widgets.pop(self.widget_cursor)
+            w = WIDGET_MAP.get(removed.id)
+            self.message = f"{R}Removed {w.label if w else removed.id}{RESET}"
+            self.widget_cursor = max(0, min(self.widget_cursor, len(widgets) - 1))
+            self.dirty = True
+            if not widgets:
+                self.mode = MODE_LINES
+        elif key == "c" and widgets:
+            self._cycle_widget_color()
+        elif key == "r" and widgets:
+            wc = widgets[self.widget_cursor]
+            wc.fg = None
+            self.dirty = True
+            self.message = f"{M}Color reset to theme default{RESET}"
+        elif key == "a":
+            self._enter_add_mode()
+
+    def _color_options(self) -> list[tuple[str, str]]:
+        theme = THEMES.get(self.config.theme, THEMES["catppuccin"])
+        return [(role, hex_val) for role, hex_val in theme.colors.items()]
+
+    def _cycle_widget_color(self) -> None:
+        widgets = self.config.lines[self.line_cursor].widgets
+        wc = widgets[self.widget_cursor]
+        options = self._color_options()
+        current_fg = wc.fg
+
+        if current_fg is None:
+            next_role, next_hex = options[0]
+        else:
+            current_idx = next(
+                (i for i, (_, h) in enumerate(options) if h == current_fg),
+                -1,
+            )
+            if current_idx == -1 or current_idx >= len(options) - 1:
+                wc.fg = None
+                self.dirty = True
+                self.message = f"{M}Color: theme default{RESET}"
+                return
+            next_role, next_hex = options[current_idx + 1]
+
+        wc.fg = next_hex
+        self.dirty = True
+        dot = f"{_hex_to_ansi_fg(next_hex)}\u25cf{RESET}"
+        self.message = f"Color: {dot} {next_role} ({next_hex})"
+
+    def _enter_add_mode(self) -> None:
+        if not self.config.lines:
+            self.config.lines.append(LineConfig())
+            self.line_cursor = 0
+            self.dirty = True
+        self.add_cursor = 0
+        self.mode = MODE_ADDING
+
+    def _active_widget_ids(self) -> set[str]:
+        return {w.id for w in self.config.lines[self.line_cursor].widgets}
+
+    def _h_adding(self, key: str) -> None:
+        if key in ("escape", "q"):
+            self.mode = MODE_EDITING if self.config.lines[self.line_cursor].widgets else MODE_LINES
+        elif key == "up":
+            self.add_cursor = (self.add_cursor - 1) % len(WIDGET_CATALOG)
+        elif key == "down":
+            self.add_cursor = (self.add_cursor + 1) % len(WIDGET_CATALOG)
+        elif key in ("enter", " "):
+            w = WIDGET_CATALOG[self.add_cursor]
+            widgets = self.config.lines[self.line_cursor].widgets
+            existing = [i for i, wc in enumerate(widgets) if wc.id == w.id]
+            if existing:
+                widgets.pop(existing[0])
+                self.message = f"{R}- {w.label}{RESET}"
+            else:
+                widgets.append(WidgetConfig(id=w.id))
+                self.message = f"{G}+ {w.label}{RESET}"
+            self.dirty = True
+
+    def _draw(self) -> None:
+        o = [CLEAR_SCREEN]
+
+        theme_names = list(THEMES.keys())
+        theme_idx = theme_names.index(self.config.theme) if self.config.theme in theme_names else 0
+        prev_t = theme_names[(theme_idx - 1) % len(theme_names)]
+        next_t = theme_names[(theme_idx + 1) % len(theme_names)]
+
+        # Title + theme
+        o.append(f"  {BOLD}{P}Claude Code Statusline Builder{RESET}")
+        o.append(f"  {M}{prev_t} <{RESET}  {BOLD}{P}{self.config.theme}{RESET}  {M}> {next_t}{RESET}   {DIM}arrows change theme{RESET}")
+        o.append("")
+
+        # Live preview
+        phantom = None
+        phantom_line = -1
+        if self.mode == MODE_ADDING:
+            w = WIDGET_CATALOG[self.add_cursor]
+            if w.id not in self._active_widget_ids():
+                phantom = w.id
+                phantom_line = self.line_cursor
+
+        preview = render_preview(self.config, phantom, phantom_line)
+        o.append(f"  {M}{'=' * 60}{RESET}")
+        for line in preview.split("\n"):
+            o.append(f"    {line}")
+        o.append(f"  {M}{'=' * 60}{RESET}")
+        o.append("")
+
+        # Lines
+        if not self.config.lines:
+            o.append(f"  {DIM}No lines. Press n to add one.{RESET}")
+        else:
+            for li, line_cfg in enumerate(self.config.lines):
+                is_active = li == self.line_cursor
+                arrow = f"{P}>{RESET}" if is_active else " "
+                lbl = f"{BOLD}{W}Line {li + 1}{RESET}" if is_active else f"{M}Line {li + 1}{RESET}"
+
+                if self.mode == MODE_EDITING and is_active and line_cfg.widgets:
+                    o.append(f"  {arrow} {lbl}")
+                    theme = THEMES.get(self.config.theme, THEMES["catppuccin"])
+                    for wi, wc in enumerate(line_cfg.widgets):
+                        w = WIDGET_MAP.get(wc.id)
+                        rendered = format_widget(wc.id, SAMPLE_PAYLOAD, theme, fg_override=wc.fg) or ""
+                        is_sel = wi == self.widget_cursor
+                        if wc.fg:
+                            color_dot = f" {_hex_to_ansi_fg(wc.fg)}\u25cf{RESET}"
+                        else:
+                            color_dot = ""
+                        if is_sel:
+                            o.append(f"      {C}>{RESET} {rendered}  {DIM}({w.label if w else wc.id}){RESET}{color_dot}")
+                        else:
+                            o.append(f"        {rendered}  {DIM}({w.label if w else wc.id}){RESET}{color_dot}")
+                else:
+                    inline = _render_line_inline(self.config, li)
+                    o.append(f"  {arrow} {lbl}  {inline}")
+
+        # Adding catalog
+        if self.mode == MODE_ADDING:
+            active_ids = self._active_widget_ids()
+            o.append("")
+            o.append(f"  {BOLD}{Y}Widgets for Line {self.line_cursor + 1}:{RESET}  {DIM}enter toggle  esc done{RESET}")
+            o.append("")
+
+            try:
+                import shutil
+                term_h = shutil.get_terminal_size().lines
+            except Exception:
+                term_h = 40
+            used_lines = len(o) + 5
+            visible_rows = max(5, term_h - used_lines)
+
+            total = len(WIDGET_CATALOG)
+            if total <= visible_rows:
+                start, end = 0, total
+            else:
+                half = visible_rows // 2
+                start = max(0, self.add_cursor - half)
+                end = start + visible_rows
+                if end > total:
+                    end = total
+                    start = end - visible_rows
+
+            if start > 0:
+                o.append(f"    {M}  ... {start} more above ...{RESET}")
+
+            current_cat = ""
+            for i in range(start, end):
+                w = WIDGET_CATALOG[i]
+                if w.category != current_cat:
+                    current_cat = w.category
+                    o.append(f"    {M}-- {current_cat.upper()} --{RESET}")
+
+                is_sel = i == self.add_cursor
+                is_act = w.id in active_ids
+                check = f"{G}x{RESET}" if is_act else " "
+
+                if is_sel:
+                    o.append(f"    {P}>{RESET} [{check}] {BOLD}{w.label:20s}{RESET} {M}{w.description}{RESET}")
+                else:
+                    marker = f"[{check}]" if is_act else f"{DIM}[ ]{RESET}"
+                    label = f"{w.label:20s}" if is_act else f"{DIM}{w.label:20s}"
+                    o.append(f"      {marker} {label} {M}{w.description}{RESET}")
+
+            if end < total:
+                o.append(f"    {M}  ... {total - end} more below ...{RESET}")
+
+        # Message
+        if self.message:
+            o.append(f"\n  {self.message}")
+
+        # Keybindings
+        o.append("")
+        if self.mode == MODE_LINES:
+            dirty = f"  {Y}*{RESET}" if self.dirty else ""
+            o.append(
+                f"  {M}enter{RESET} edit line  "
+                f"{M}a{RESET} add  "
+                f"{M}n{RESET} new line  "
+                f"{M}x{RESET} del line  "
+                f"{M}s{RESET} save  "
+                f"{M}i{RESET} install  "
+                f"{M}q{RESET} quit{dirty}"
+            )
+        elif self.mode == MODE_EDITING:
+            o.append(
+                f"  {M}up/dn{RESET} select  "
+                f"{M}left/right{RESET} reorder  "
+                f"{M}a{RESET} add  "
+                f"{M}d{RESET} remove  "
+                f"{M}c{RESET} color  "
+                f"{M}r{RESET} reset color  "
+                f"{M}esc{RESET} back"
+            )
+        elif self.mode == MODE_ADDING:
+            o.append(
+                f"  {M}up/dn{RESET} browse  "
+                f"{M}enter{RESET} add  "
+                f"{M}esc{RESET} done"
+            )
+        elif self.mode == MODE_CONFIRM:
+            o.append(f"  {M}s{RESET} save  {M}q{RESET} discard & quit")
+
+        sys.stdout.write("\n".join(o) + "\n")
+        sys.stdout.flush()
+
+
+# ── CLI helpers ───────────────────────────────────────────────────
+
+def _set_theme(name: str) -> None:
+    if name not in THEMES:
+        print(f"Unknown theme: {name}")
+        print(f"Available: {', '.join(THEMES.keys())}")
+        return
+    config = load_config()
+    config.theme = name
+    save_config(config)
+    print(f"Theme set to: {name}")
+
+
+def _list_themes() -> None:
+    current = load_config().theme
+    print("\033[1mAvailable themes:\033[0m\n")
+    for name, t in THEMES.items():
+        marker = " <" if name == current else ""
+        print(f"  {name:15s} — {t.description}{marker}")
+
+
+def _list_widgets() -> None:
+    print("\033[1mAvailable widgets:\033[0m\n")
+    for cat in CATEGORIES:
+        print(f"  \033[2m── {cat.upper()} ──\033[0m")
+        for w in WIDGET_CATALOG:
+            if w.category == cat:
+                print(f"    {w.id:20s} {w.description}")
+        print()
+
+
+def _do_install() -> None:
+    install_to_claude()
+    print("\033[32mInstalled to Claude Code!\033[0m")
+    print("  Restart Claude Code to see your statusline.")
+
+
+def _get_layout_lines(layout: str) -> list[LineConfig]:
+    if layout == "minimal":
+        return [
+            LineConfig(widgets=[
+                WidgetConfig("model_name"),
+                WidgetConfig("context_percent"),
+                WidgetConfig("session_cost"),
+            ]),
+        ]
+    elif layout == "full":
+        return [
+            LineConfig(widgets=[
+                WidgetConfig("model_name"),
+                WidgetConfig("context_usage"),
+            ]),
+            LineConfig(widgets=[
+                WidgetConfig("session_cost"),
+                WidgetConfig("session_duration"),
+                WidgetConfig("lines_changed"),
+                WidgetConfig("version"),
+            ]),
+            LineConfig(widgets=[
+                WidgetConfig("directory"),
+                WidgetConfig("vim_mode"),
+                WidgetConfig("git_branch"),
+            ]),
+        ]
+    else:
+        return default_layout()
+
+
+# ── Entry point ───────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    # Claude Code pipe mode: read JSON from stdin, render, exit
+    if not sys.stdin.isatty():
+        try:
+            raw = sys.stdin.read()
+            data = json.loads(raw) if raw.strip() else {}
+        except (json.JSONDecodeError, EOFError, ValueError):
+            data = {}
+        output = render(data)
+        if output:
+            print(output)
+        sys.exit(0)
+
+    # Interactive / CLI mode
+    parser = argparse.ArgumentParser(
+        prog="statusline.py",
+        description="Beautiful, customizable statusline for Claude Code CLI",
+    )
+    parser.add_argument(
+        "--config", action="store_true",
+        help="Open the interactive TUI configurator",
+    )
+    parser.add_argument(
+        "--theme", type=str, metavar="NAME",
+        help="Set theme (catppuccin, tokyo-night, gruvbox, nord, dracula, rose-pine, warm)",
+    )
+    parser.add_argument(
+        "--install", action="store_true",
+        help="Install statusline to Claude Code settings",
+    )
+    parser.add_argument(
+        "--list-themes", action="store_true",
+        help="List available themes",
+    )
+    parser.add_argument(
+        "--list-widgets", action="store_true",
+        help="List available widgets",
+    )
+
+    args = parser.parse_args()
+
+    if args.list_themes:
+        _list_themes()
+    elif args.list_widgets:
+        _list_widgets()
+    elif args.theme:
+        _set_theme(args.theme)
+    elif args.install:
+        _do_install()
+    else:
+        # Default: open the live builder (--config or bare invocation)
+        builder = Builder()
+        builder.run()
