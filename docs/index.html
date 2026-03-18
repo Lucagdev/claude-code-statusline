@@ -1,0 +1,792 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claude Code Statusline — Beautiful status bar for Claude Code</title>
+  <meta name="description" content="Beautiful, customizable status bar for your terminal. 35 widgets, 7 themes, interactive builder. One command to install.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0c0c0c;
+      --bg-elevated: #141414;
+      --bg-surface: #1a1a1a;
+      --fg: #ececec;
+      --fg-2: #a0a0a0;
+      --fg-3: #5a5a5a;
+      --accent: #e8a23a;
+      --accent-dim: rgba(232, 162, 58, 0.12);
+      --accent-glow: rgba(232, 162, 58, 0.06);
+      --green: #34d399;
+      --green-dim: rgba(52, 211, 153, 0.1);
+      --line: #222;
+      --radius: 12px;
+      --font-display: 'Instrument Serif', Georgia, serif;
+      --font-body: 'DM Sans', system-ui, sans-serif;
+      --font-mono: 'DM Mono', 'Courier New', monospace;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: var(--font-body);
+      background: var(--bg);
+      color: var(--fg);
+      min-height: 100vh;
+      overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* Grain overlay */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      opacity: 0.025;
+      pointer-events: none;
+      z-index: 100;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    }
+
+    /* Top glow */
+    .glow {
+      position: fixed;
+      top: -300px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 800px;
+      height: 600px;
+      background: radial-gradient(ellipse, var(--accent-glow) 0%, transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .page {
+      position: relative;
+      z-index: 1;
+      max-width: 680px;
+      margin: 0 auto;
+      padding: 80px 24px 60px;
+    }
+
+    /* ── Header ── */
+    .header {
+      text-align: center;
+      margin-bottom: 64px;
+    }
+
+    .byline {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--fg-3);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 20px;
+    }
+
+    .title {
+      font-family: var(--font-display);
+      font-size: clamp(3rem, 8vw, 4.5rem);
+      font-weight: 400;
+      line-height: 1;
+      margin-bottom: 8px;
+      color: var(--fg);
+    }
+
+    .title em {
+      color: var(--accent);
+      font-style: italic;
+    }
+
+    .tagline {
+      font-family: var(--font-display);
+      font-style: italic;
+      font-size: 1.25rem;
+      color: var(--fg-2);
+      margin-top: 16px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 24px;
+      padding: 6px 16px;
+      background: var(--green-dim);
+      border: 1px solid rgba(52, 211, 153, 0.2);
+      border-radius: 100px;
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      color: var(--green);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .badge-dot {
+      width: 6px;
+      height: 6px;
+      background: var(--green);
+      border-radius: 50%;
+      animation: pulse-dot 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    /* ── Divider ── */
+    .divider {
+      border: none;
+      height: 1px;
+      background: var(--line);
+      margin: 48px 0;
+    }
+
+    /* ── Hero terminal ── */
+    .hero-terminal {
+      background: var(--bg-elevated);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+      margin: 40px 0;
+    }
+
+    .terminal-chrome {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 10px 14px;
+      background: rgba(255,255,255,0.02);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .terminal-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--fg-3);
+      opacity: 0.3;
+    }
+
+    .terminal-label {
+      margin-left: 8px;
+      font-family: var(--font-mono);
+      font-size: 0.65rem;
+      color: var(--fg-3);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .hero-terminal-body {
+      padding: 20px 20px 22px;
+      font-family: var(--font-mono);
+      font-size: 0.82rem;
+      line-height: 1.9;
+    }
+
+    /* Statusline color tokens */
+    .sl-amber   { color: #e8a23a; }
+    .sl-amber-d { color: #b07828; }
+    .sl-green   { color: #34d399; }
+    .sl-red     { color: #f87171; }
+    .sl-blue    { color: #60a5fa; }
+    .sl-cyan    { color: #67e8f9; }
+    .sl-gray    { color: #5a5a5a; }
+    .sl-muted   { color: #404040; }
+    .sl-fg2     { color: #a0a0a0; }
+    .sl-white   { color: #ececec; }
+
+    .sl-row {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      flex-wrap: wrap;
+      white-space: pre;
+    }
+
+    .sl-sep {
+      color: #333;
+      margin: 0 6px;
+    }
+
+    .sl-bar-fill { color: #e8a23a; }
+    .sl-bar-empty { color: #2a2a2a; }
+
+    /* ── Steps ── */
+    .steps {
+      counter-reset: step;
+    }
+
+    .step {
+      margin-bottom: 36px;
+    }
+
+    .step-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+      counter-increment: step;
+    }
+
+    .step-number {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      border: 1.5px solid var(--accent);
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      color: var(--accent);
+      flex-shrink: 0;
+    }
+
+    .step-title {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--fg);
+    }
+
+    .step-hint {
+      font-size: 0.85rem;
+      color: var(--fg-3);
+      margin-left: 44px;
+      padding: 10px 14px;
+      background: var(--bg-elevated);
+      border-left: 2px solid var(--line);
+      border-radius: 0 8px 8px 0;
+    }
+
+    .step-hint kbd {
+      display: inline-block;
+      padding: 1px 6px;
+      background: var(--bg-surface);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      font-family: var(--font-mono);
+      font-size: 0.8em;
+      color: var(--fg-2);
+    }
+
+    /* ── Terminal window ── */
+    .terminal {
+      background: var(--bg-elevated);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+      margin-left: 44px;
+    }
+
+    .terminal-body {
+      padding: 16px;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+    }
+
+    .terminal-prompt {
+      color: var(--accent);
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      flex-shrink: 0;
+      user-select: none;
+      line-height: 1.6;
+    }
+
+    .terminal-cmd {
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      color: var(--fg-2);
+      word-break: break-all;
+      line-height: 1.6;
+      cursor: text;
+      user-select: all;
+      flex: 1;
+    }
+
+    .terminal-actions {
+      padding: 0 16px 14px;
+      display: flex;
+      justify-content: flex-end;
+    }
+
+    .copy-btn {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: var(--accent);
+      background: var(--accent-dim);
+      border: 1px solid rgba(232, 162, 58, 0.2);
+      border-radius: 6px;
+      padding: 7px 16px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .copy-btn:hover {
+      background: rgba(232, 162, 58, 0.2);
+      border-color: rgba(232, 162, 58, 0.4);
+    }
+
+    .copy-btn.copied {
+      color: var(--green);
+      background: var(--green-dim);
+      border-color: rgba(52, 211, 153, 0.3);
+    }
+
+    /* ── Toggle ── */
+    .toggle-wrap {
+      margin-left: 44px;
+      margin-top: 10px;
+    }
+
+    .toggle-all {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      color: var(--fg-3);
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 4px 0;
+      letter-spacing: 0.03em;
+      border-bottom: 1px dashed var(--fg-3);
+      transition: color 0.2s;
+    }
+
+    .toggle-all:hover { color: var(--fg-2); }
+
+    .all-commands {
+      display: none;
+      margin-top: 14px;
+    }
+
+    .all-commands.show { display: block; }
+
+    .all-commands .terminal { margin-left: 0; margin-bottom: 10px; }
+
+    /* ── Configure section ── */
+    .configure-section {
+      margin: 0 0 48px;
+    }
+
+    .configure-section h2 {
+      font-family: var(--font-display);
+      font-size: 1.5rem;
+      font-weight: 400;
+      color: var(--fg);
+      margin-bottom: 6px;
+    }
+
+    .configure-section p {
+      font-size: 0.85rem;
+      color: var(--fg-3);
+      margin-bottom: 16px;
+      line-height: 1.6;
+    }
+
+    .configure-section .terminal {
+      margin-left: 0;
+    }
+
+    /* ── Features ── */
+    .features {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1px;
+      background: var(--line);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+      margin: 48px 0;
+    }
+
+    .feat {
+      background: var(--bg);
+      padding: 28px 24px;
+      transition: background 0.3s;
+    }
+
+    .feat:hover { background: var(--bg-elevated); }
+
+    .feat-num {
+      font-family: var(--font-mono);
+      font-size: 0.6rem;
+      color: var(--fg-3);
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+
+    .feat-title {
+      font-family: var(--font-display);
+      font-size: 1.15rem;
+      margin-bottom: 6px;
+      color: var(--fg);
+    }
+
+    .feat-desc {
+      font-size: 0.8rem;
+      color: var(--fg-3);
+      line-height: 1.5;
+    }
+
+    /* ── Mobile alert ── */
+    .mobile-alert {
+      display: none;
+      text-align: center;
+      padding: 20px;
+      margin: 20px 0;
+      background: var(--accent-dim);
+      border: 1px solid rgba(232, 162, 58, 0.2);
+      border-radius: var(--radius);
+      font-size: 0.9rem;
+      color: var(--accent);
+    }
+
+    /* ── Footer ── */
+    .footer {
+      text-align: center;
+      padding-top: 32px;
+      border-top: 1px solid var(--line);
+    }
+
+    .footer-name {
+      font-family: var(--font-display);
+      font-size: 1.1rem;
+      color: var(--fg-2);
+      margin-bottom: 12px;
+    }
+
+    .footer-links {
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      margin-bottom: 20px;
+    }
+
+    .footer-links a {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      color: var(--fg-3);
+      text-decoration: none;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      padding-bottom: 2px;
+      border-bottom: 1px solid transparent;
+      transition: all 0.2s;
+    }
+
+    .footer-links a:hover {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+
+    .star-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      color: var(--fg-3);
+      text-decoration: none;
+      padding: 8px 18px;
+      border: 1px solid var(--line);
+      border-radius: 100px;
+      transition: all 0.2s;
+      letter-spacing: 0.03em;
+    }
+
+    .star-link:hover {
+      color: var(--accent);
+      border-color: rgba(232, 162, 58, 0.3);
+      background: var(--accent-dim);
+    }
+
+    .star-link svg {
+      width: 14px;
+      height: 14px;
+      fill: currentColor;
+    }
+
+    /* ── Animations ── */
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .header { animation: fadeUp 0.8s ease-out; }
+    .hero-terminal { animation: fadeUp 0.6s ease-out 0.15s both; }
+    .step:nth-child(1) { animation: fadeUp 0.6s ease-out 0.2s both; }
+    .step:nth-child(2) { animation: fadeUp 0.6s ease-out 0.35s both; }
+    .step:nth-child(3) { animation: fadeUp 0.6s ease-out 0.5s both; }
+    .features { animation: fadeUp 0.6s ease-out 0.6s both; }
+
+    /* ── Responsive ── */
+    @media (max-width: 540px) {
+      .page { padding: 48px 18px 40px; }
+      .title { font-size: 2.6rem; }
+      .features { grid-template-columns: 1fr; }
+      .terminal, .toggle-wrap, .step-hint { margin-left: 0; margin-top: 10px; }
+      .footer-links { gap: 14px; }
+      .hero-terminal-body { font-size: 0.72rem; }
+    }
+  </style>
+</head>
+<body>
+  <div class="glow"></div>
+
+  <div class="page">
+    <header class="header">
+      <div class="byline">by Lucas Duarte</div>
+      <h1 class="title">Claude Code <em>Statusline</em></h1>
+      <p class="tagline">Beautiful, customizable status bar for your terminal.</p>
+      <div class="badge"><span class="badge-dot"></span> zero dependencies</div>
+    </header>
+
+    <p style="text-align:center; color:var(--fg-2); font-size:1rem; line-height:1.7; max-width:480px; margin:0 auto 8px;">
+      35 widgets. 7 themes. Interactive builder. One command to install.
+    </p>
+
+    <!-- Hero terminal: statusline preview -->
+    <div class="hero-terminal">
+      <div class="terminal-chrome">
+        <div class="terminal-dot"></div>
+        <div class="terminal-dot"></div>
+        <div class="terminal-dot"></div>
+        <span class="terminal-label">claude code — statusline preview</span>
+      </div>
+      <div class="hero-terminal-body">
+        <div class="sl-row">
+          <span class="sl-amber">Opus 4.6 (1M)</span>
+          <span class="sl-sep"> │ </span>
+          <span class="sl-fg2">87k</span><span class="sl-gray">/</span><span class="sl-fg2">1.0M</span>
+          <span class="sl-gray"> </span>
+          <span class="sl-blue">[</span><span class="sl-bar-fill">████</span><span class="sl-bar-empty">░░░░░░</span><span class="sl-blue">]</span>
+          <span class="sl-fg2"> 42%</span>
+        </div>
+        <div class="sl-row">
+          <span class="sl-fg2">Session</span>
+          <span class="sl-gray"> </span>
+          <span class="sl-cyan">[</span><span class="sl-bar-fill">██</span><span class="sl-bar-empty">░░░░░░░░</span><span class="sl-cyan">]</span>
+          <span class="sl-fg2"> 19%</span>
+          <span class="sl-sep">  </span>
+          <span class="sl-gray">resets </span><span class="sl-fg2">4h 31m</span>
+        </div>
+        <div class="sl-row">
+          <span class="sl-green">$3.47</span>
+          <span class="sl-sep"> │ </span>
+          <span class="sl-fg2">2h 00m</span>
+          <span class="sl-sep"> │ </span>
+          <span class="sl-green">+245</span>
+          <span class="sl-gray"> </span>
+          <span class="sl-red">-89</span>
+        </div>
+        <div class="sl-row">
+          <span class="sl-gray">~/projetos/my-project/src</span>
+        </div>
+      </div>
+    </div>
+
+    <hr class="divider">
+
+    <div id="mobile-alert" class="mobile-alert">
+      You are on mobile. Save this link and open it on your computer to install.
+    </div>
+
+    <div class="steps" id="steps">
+      <div class="step">
+        <div class="step-header">
+          <div class="step-number">1</div>
+          <div class="step-title">Open your terminal</div>
+        </div>
+        <div class="step-hint" id="open-hint"></div>
+      </div>
+
+      <div class="step">
+        <div class="step-header">
+          <div class="step-number">2</div>
+          <div class="step-title">Paste this command</div>
+        </div>
+        <div class="terminal" id="main-terminal">
+          <div class="terminal-chrome">
+            <div class="terminal-dot"></div>
+            <div class="terminal-dot"></div>
+            <div class="terminal-dot"></div>
+            <span class="terminal-label" id="os-label"></span>
+          </div>
+          <div class="terminal-body">
+            <span class="terminal-prompt" id="main-prompt">$</span>
+            <code class="terminal-cmd" id="command-text"></code>
+          </div>
+          <div class="terminal-actions">
+            <button class="copy-btn" id="copy-btn" onclick="copyCommand()">Copy</button>
+          </div>
+        </div>
+        <div class="toggle-wrap">
+          <button class="toggle-all" onclick="toggleAll()">Using a different OS?</button>
+          <div class="all-commands" id="all-commands">
+            <div class="terminal">
+              <div class="terminal-chrome">
+                <div class="terminal-dot"></div><div class="terminal-dot"></div><div class="terminal-dot"></div>
+                <span class="terminal-label">linux / macos</span>
+              </div>
+              <div class="terminal-body">
+                <span class="terminal-prompt">$</span>
+                <code class="terminal-cmd">curl -fsSL https://raw.githubusercontent.com/Lucagdev/claude-code-statusline/main/install.sh | bash</code>
+              </div>
+              <div class="terminal-actions">
+                <button class="copy-btn" onclick="copyText(this, 'curl -fsSL https://raw.githubusercontent.com/Lucagdev/claude-code-statusline/main/install.sh | bash')">Copy</button>
+              </div>
+            </div>
+            <div class="terminal">
+              <div class="terminal-chrome">
+                <div class="terminal-dot"></div><div class="terminal-dot"></div><div class="terminal-dot"></div>
+                <span class="terminal-label">windows powershell</span>
+              </div>
+              <div class="terminal-body">
+                <span class="terminal-prompt">PS&gt;</span>
+                <code class="terminal-cmd">irm https://raw.githubusercontent.com/Lucagdev/claude-code-statusline/main/install.ps1 | iex</code>
+              </div>
+              <div class="terminal-actions">
+                <button class="copy-btn" onclick="copyText(this, 'irm https://raw.githubusercontent.com/Lucagdev/claude-code-statusline/main/install.ps1 | iex')">Copy</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-header">
+          <div class="step-number">3</div>
+          <div class="step-title">Restart Claude Code</div>
+        </div>
+        <div class="step-hint">
+          Your statusline is ready. Run the builder to customize it to your liking.
+        </div>
+      </div>
+    </div>
+
+    <div class="features">
+      <div class="feat">
+        <div class="feat-num">01</div>
+        <div class="feat-title">35 Widgets</div>
+        <div class="feat-desc">Model, context, tokens, cost, duration, git branch, vim mode, session limits, and more.</div>
+      </div>
+      <div class="feat">
+        <div class="feat-num">02</div>
+        <div class="feat-title">7 Themes</div>
+        <div class="feat-desc">Catppuccin, Tokyo Night, Gruvbox, Nord, Dracula, Rose Pine, Warm.</div>
+      </div>
+      <div class="feat">
+        <div class="feat-num">03</div>
+        <div class="feat-title">Interactive Builder</div>
+        <div class="feat-desc">Arrow keys, live preview, toggle widgets, customize colors — all in your terminal.</div>
+      </div>
+      <div class="feat">
+        <div class="feat-num">04</div>
+        <div class="feat-title">Cross-Platform</div>
+        <div class="feat-desc">Linux, macOS, Windows. Python 3.10+, zero external dependencies.</div>
+      </div>
+    </div>
+
+    <div class="configure-section">
+      <h2>Customize it</h2>
+      <p>Opens the interactive builder. Navigate with arrow keys, toggle widgets with Enter, change themes with ←→.</p>
+      <div class="terminal">
+        <div class="terminal-chrome">
+          <div class="terminal-dot"></div>
+          <div class="terminal-dot"></div>
+          <div class="terminal-dot"></div>
+          <span class="terminal-label">interactive builder</span>
+        </div>
+        <div class="terminal-body">
+          <span class="terminal-prompt">$</span>
+          <code class="terminal-cmd">python3 ~/.claude-statusline/statusline.py</code>
+        </div>
+        <div class="terminal-actions">
+          <button class="copy-btn" onclick="copyText(this, 'python3 ~/.claude-statusline/statusline.py')">Copy</button>
+        </div>
+      </div>
+    </div>
+
+    <footer class="footer">
+      <div class="footer-name">Lucas Duarte</div>
+      <div class="footer-links">
+        <a href="https://www.threads.com/@lucasgduartee">Threads</a>
+        <a href="https://github.com/Lucagdev">GitHub</a>
+        <a href="https://youtube.com/@lucasgdev">YouTube</a>
+      </div>
+      <a href="https://github.com/Lucagdev/claude-code-statusline" class="star-link">
+        <svg viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+        Give it a star on GitHub
+      </a>
+    </footer>
+  </div>
+
+  <script>
+    function detectOS() {
+      var ua = navigator.userAgent.toLowerCase();
+      var p = (navigator.platform || '').toLowerCase();
+      if (ua.indexOf('win') !== -1) return 'windows';
+      if (ua.indexOf('mac') !== -1 || p.indexOf('mac') !== -1) return 'macos';
+      if (ua.indexOf('linux') !== -1 || ua.indexOf('x11') !== -1) return 'linux';
+      if (ua.indexOf('android') !== -1) return 'android';
+      if (ua.indexOf('iphone') !== -1 || ua.indexOf('ipad') !== -1) return 'ios';
+      return 'linux';
+    }
+
+    var os = detectOS();
+    var commands = {
+      windows: 'irm https://raw.githubusercontent.com/Lucagdev/claude-code-statusline/main/install.ps1 | iex',
+      macos:   'curl -fsSL https://raw.githubusercontent.com/Lucagdev/claude-code-statusline/main/install.sh | bash',
+      linux:   'curl -fsSL https://raw.githubusercontent.com/Lucagdev/claude-code-statusline/main/install.sh | bash'
+    };
+    var osLabels = { windows: 'windows powershell', macos: 'macos terminal', linux: 'linux terminal' };
+    var prompts  = { windows: 'PS>', macos: '$', linux: '$' };
+    var hints = {
+      windows: 'Press <kbd>Win + X</kbd> and click <kbd>Terminal</kbd> or <kbd>PowerShell</kbd>',
+      macos:   'Press <kbd>Cmd + Space</kbd>, type <kbd>Terminal</kbd> and hit Enter',
+      linux:   'Press <kbd>Ctrl + Alt + T</kbd> to open the terminal'
+    };
+
+    var resolved = (os === 'android' || os === 'ios') ? 'linux' : os;
+
+    document.getElementById('os-label').textContent    = osLabels[resolved];
+    document.getElementById('command-text').textContent = commands[resolved];
+    document.getElementById('open-hint').innerHTML      = hints[resolved] || 'Open a terminal on your computer';
+    document.getElementById('main-prompt').textContent  = prompts[resolved];
+
+    if (os === 'android' || os === 'ios') {
+      document.getElementById('mobile-alert').style.display = 'block';
+      document.getElementById('steps').style.display = 'none';
+    }
+
+    function copyCommand() {
+      var btn = document.getElementById('copy-btn');
+      navigator.clipboard.writeText(commands[resolved]).then(function() {
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(function() { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+      });
+    }
+
+    function copyText(btn, text) {
+      navigator.clipboard.writeText(text).then(function() {
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(function() { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+      });
+    }
+
+    function toggleAll() {
+      document.getElementById('all-commands').classList.toggle('show');
+    }
+  </script>
+</body>
+</html>
