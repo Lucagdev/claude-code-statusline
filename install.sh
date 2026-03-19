@@ -59,7 +59,7 @@ settings_path = r'$PY_SETTINGS'
 install_dir = r'$PY_INSTALL_DIR'
 with open(settings_path) as f:
     s = json.load(f)
-cmd = '$PYTHON ' + os.path.join(install_dir, 'statusline.py')
+cmd = '$PYTHON ' + os.path.join(install_dir, 'statusline.py').replace('\\\\', '/')
 s['statusLine'] = {'type': 'command', 'command': cmd, 'padding': 0}
 with open(settings_path, 'w') as f:
     json.dump(s, f, indent=2)
@@ -71,7 +71,7 @@ else
 import json, os
 settings_path = r'$PY_SETTINGS'
 install_dir = r'$PY_INSTALL_DIR'
-cmd = '$PYTHON ' + os.path.join(install_dir, 'statusline.py')
+cmd = '$PYTHON ' + os.path.join(install_dir, 'statusline.py').replace('\\\\', '/')
 s = {'statusLine': {'type': 'command', 'command': cmd, 'padding': 0}}
 with open(settings_path, 'w') as f:
     json.dump(s, f, indent=2)

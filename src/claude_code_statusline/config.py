@@ -97,7 +97,8 @@ def _detect_command() -> str:
     home_install = Path.home() / ".claude-statusline"
     if str(script_dir).startswith(str(home_install)):
         python = "python3" if sys.platform != "win32" else "python"
-        return f"{python} {home_install / 'statusline.py'}"
+        path = str(home_install / 'statusline.py').replace('\\', '/')
+        return f"{python} {path}"
 
     # Check if existing settings.json has a command configured
     settings_path = Path.home() / ".claude" / "settings.json"

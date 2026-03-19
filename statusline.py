@@ -267,7 +267,8 @@ def _detect_command() -> str:
     home_install = Path.home() / ".claude-statusline" / "statusline.py"
     if script_path == home_install.resolve():
         python = "python3" if sys.platform != "win32" else "python"
-        return f"{python} {home_install}"
+        # Use forward slashes — works in all shells on Windows
+        return f"{python} {str(home_install).replace(chr(92), '/')}"
 
     # Check if existing settings.json has a command configured
     settings_path = Path.home() / ".claude" / "settings.json"
