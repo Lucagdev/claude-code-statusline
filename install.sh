@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Claude Code Statusline — Installer for Linux/Mac/WSL
+# Claude Code Statusline — Installer for Linux/Mac/WSL/Windows (Git Bash)
 
 set -e
 
@@ -11,14 +11,18 @@ echo "  Claude Code Statusline"
 echo "  Beautiful, customizable status bar for Claude Code"
 echo ""
 
-# Check Python
-if ! command -v python3 &>/dev/null; then
+# Check Python (python3 on Linux/Mac, python on Windows/Git Bash)
+if command -v python3 &>/dev/null; then
+    PYTHON=python3
+elif command -v python &>/dev/null && python -c "import sys; sys.exit(0 if sys.version_info.major==3 else 1)" 2>/dev/null; then
+    PYTHON=python
+else
     echo "Error: Python 3 is required. Install it first."
     exit 1
 fi
 
 # Check Python version >= 3.10
-PY_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+PY_VERSION=$($PYTHON -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
 PY_MAJOR=$(echo $PY_VERSION | cut -d. -f1)
 PY_MINOR=$(echo $PY_VERSION | cut -d. -f2)
 if [ "$PY_MAJOR" -lt 3 ] || ([ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 10 ]); then
@@ -38,23 +42,23 @@ chmod +x "$INSTALL_DIR/statusline.py"
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
 if [ -f "$CLAUDE_SETTINGS" ]; then
     # Use Python to safely merge JSON
-    python3 -c "
+    $PYTHON -c "
 import json
 with open('$CLAUDE_SETTINGS') as f:
     s = json.load(f)
-s['statusLine'] = {'type': 'command', 'command': 'python3 $INSTALL_DIR/statusline.py', 'padding': 0}
+s['statusLine'] = {'type': 'command', 'command': '$PYTHON $INSTALL_DIR/statusline.py', 'padding': 0}
 with open('$CLAUDE_SETTINGS', 'w') as f:
     json.dump(s, f, indent=2)
     f.write('\n')
 "
 else
     mkdir -p "$HOME/.claude"
-    echo '{"statusLine":{"type":"command","command":"python3 '"$INSTALL_DIR"'/statusline.py","padding":0}}' | python3 -m json.tool > "$CLAUDE_SETTINGS"
+    echo '{"statusLine":{"type":"command","command":"'"$PYTHON"' '"$INSTALL_DIR"'/statusline.py","padding":0}}' | $PYTHON -m json.tool > "$CLAUDE_SETTINGS"
 fi
 
 echo ""
 echo "  ✓ Installed!"
 echo ""
 echo "  Restart Claude Code to see your statusline."
-echo "  To configure: python3 ~/.claude-statusline/statusline.py"
+echo "  To configure: $PYTHON ~/.claude-statusline/statusline.py"
 echo ""
