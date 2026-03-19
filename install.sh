@@ -86,9 +86,19 @@ echo "  Restart Claude Code to see your statusline."
 echo ""
 
 # Launch interactive configurator
-# Works when run via: bash <(curl ...) — stdin stays free for TUI
 if [ -t 0 ] && [ -t 1 ]; then
-    $PYTHON "$INSTALL_DIR/statusline.py" --config
+    # Git Bash (MinTTY) needs winpty to bridge Python's msvcrt with the terminal
+    if [[ "$(uname -s)" == MINGW* ]] || [[ "$(uname -s)" == MSYS* ]]; then
+        if command -v winpty &>/dev/null; then
+            winpty $PYTHON "$INSTALL_DIR/statusline.py" --config
+        else
+            echo "  To customize, run in PowerShell or CMD:"
+            echo "    python ~/.claude-statusline/statusline.py"
+            echo ""
+        fi
+    else
+        $PYTHON "$INSTALL_DIR/statusline.py" --config
+    fi
 else
     echo "  To customize: $PYTHON ~/.claude-statusline/statusline.py"
     echo ""
