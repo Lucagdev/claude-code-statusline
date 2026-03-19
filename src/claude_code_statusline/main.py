@@ -12,6 +12,10 @@ import sys
 
 
 def entry():
+    # Ensure stdout supports Unicode on Windows
+    if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+
     parser = argparse.ArgumentParser(
         prog="claude-code-statusline",
         description="Beautiful, customizable statusline for Claude Code CLI",
