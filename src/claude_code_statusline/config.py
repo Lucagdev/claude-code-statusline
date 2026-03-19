@@ -88,13 +88,38 @@ def _widget_to_dict(w: WidgetConfig) -> dict:
     return d
 
 
+def _detect_command() -> str:
+    """Detect the best command to run the statusline based on install method."""
+    import sys
+
+    # If running from ~/.claude-statusline/, use python directly
+    script_dir = Path(__file__).resolve().parent
+    home_install = Path.home() / ".claude-statusline"
+    if str(script_dir).startswith(str(home_install)):
+        python = "python3" if sys.platform != "win32" else "python"
+        return f"{python} {home_install / 'statusline.py'}"
+
+    # Check if existing settings.json has a command configured
+    settings_path = Path.home() / ".claude" / "settings.json"
+    if settings_path.exists():
+        try:
+            settings = json.loads(settings_path.read_text())
+            existing = settings.get("statusLine", {}).get("command", "")
+            if existing:
+                return existing
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    # Fallback to uvx
+    return "uvx claude-code-statusline"
+
+
 def install_to_claude(command: str = "") -> None:
     """Write statusLine config to ~/.claude/settings.json."""
     settings_path = Path.home() / ".claude" / "settings.json"
-    project_path = Path(__file__).resolve().parents[2]
 
     if not command:
-        command = f"uv run --project {project_path} cc-statusline"
+        command = _detect_command()
 
     if settings_path.exists():
         settings = json.loads(settings_path.read_text())

@@ -263,7 +263,7 @@ class Builder:
             self.message = f"{G}Config saved!{RESET}"
         elif key == "i":
             save_config(self.config)
-            install_to_claude(command="uvx claude-code-statusline")
+            install_to_claude()
             self.dirty = False
             self.message = f"{G}Saved & installed to Claude Code!{RESET}"
         return False

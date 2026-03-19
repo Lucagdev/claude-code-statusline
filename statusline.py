@@ -260,13 +260,36 @@ def _widget_to_dict(w: WidgetConfig) -> dict:
     return d
 
 
+def _detect_command() -> str:
+    """Detect the best command to run the statusline based on install method."""
+    # If running from ~/.claude-statusline/, use python directly
+    script_path = Path(__file__).resolve()
+    home_install = Path.home() / ".claude-statusline" / "statusline.py"
+    if script_path == home_install.resolve():
+        python = "python3" if sys.platform != "win32" else "python"
+        return f"{python} {home_install}"
+
+    # Check if existing settings.json has a command configured
+    settings_path = Path.home() / ".claude" / "settings.json"
+    if settings_path.exists():
+        try:
+            settings = json.loads(settings_path.read_text())
+            existing = settings.get("statusLine", {}).get("command", "")
+            if existing:
+                return existing
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    # Fallback to uvx
+    return "uvx claude-code-statusline"
+
+
 def install_to_claude(command: str = "") -> None:
     """Write statusLine config to ~/.claude/settings.json."""
     settings_path = Path.home() / ".claude" / "settings.json"
-    project_path = Path(__file__).resolve().parents[2]
 
     if not command:
-        command = f"uv run --project {project_path} cc-statusline"
+        command = _detect_command()
 
     if settings_path.exists():
         settings = json.loads(settings_path.read_text())
@@ -1489,7 +1512,7 @@ class Builder:
             self.message = f"{G}Config saved!{RESET}"
         elif key == "i":
             save_config(self.config)
-            install_to_claude(command="uvx claude-code-statusline")
+            install_to_claude()
             self.dirty = False
             self.message = f"{G}Saved & installed to Claude Code!{RESET}"
         return False
@@ -1993,7 +2016,7 @@ def _setup_wizard():
     save_config(config)
 
     if install_idx == 0:
-        install_to_claude(command="uvx claude-code-statusline")
+        install_to_claude()
         print("  \033[32m✓ Installed!\033[0m Restart Claude Code to see your statusline.\n")
     else:
         print(f"  \033[32m✓ Config saved!\033[0m at {CONFIG_FILE}")
@@ -2050,7 +2073,7 @@ def _list_widgets():
 
 
 def _install():
-    install_to_claude(command="uvx claude-code-statusline")
+    install_to_claude()
     print("\033[32m✓ Installed to Claude Code!\033[0m")
     print("  Restart Claude Code to see your statusline.")
 

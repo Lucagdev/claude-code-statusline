@@ -244,7 +244,7 @@ def _setup_wizard():
     save_config(config)
 
     if install_idx == 0:
-        install_to_claude(command="uvx claude-code-statusline")
+        install_to_claude()
         print("  \033[32m✓ Installed!\033[0m Restart Claude Code to see your statusline.\n")
     else:
         print(f"  \033[32m✓ Config saved!\033[0m at {CONFIG_FILE}")
@@ -308,6 +308,6 @@ def _list_widgets():
 
 def _install():
     from .config import install_to_claude
-    install_to_claude(command="uvx claude-code-statusline")
+    install_to_claude()
     print("\033[32m✓ Installed to Claude Code!\033[0m")
     print("  Restart Claude Code to see your statusline.")
