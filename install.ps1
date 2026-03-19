@@ -37,7 +37,7 @@ if (Test-Path $claudeSettings) {
 }
 $settings.statusLine = @{
     type = "command"
-    command = "python `"$installDir\statusline.py`""
+    command = "python `"$($installDir.Replace('\','/'))/statusline.py`""
     padding = 0
 }
 $settings | ConvertTo-Json -Depth 10 | Set-Content $claudeSettings
@@ -49,4 +49,9 @@ Write-Host "  Restart Claude Code to see your statusline."
 Write-Host ""
 
 # Launch interactive configurator
-python "$installDir\statusline.py" --config
+try {
+    python "$installDir\statusline.py" --config
+} catch {
+    Write-Host "  To customize: python ~/.claude-statusline/statusline.py" -ForegroundColor DarkGray
+    Write-Host ""
+}
