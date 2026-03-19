@@ -82,5 +82,13 @@ echo ""
 echo "  ✓ Installed!"
 echo ""
 echo "  Restart Claude Code to see your statusline."
-echo "  To configure: $PYTHON ~/.claude-statusline/statusline.py"
 echo ""
+
+# Launch interactive configurator if running in a terminal
+# (won't work when piped via curl | bash — stdin is not a TTY)
+if [ -t 0 ] && [ -t 1 ]; then
+    $PYTHON "$INSTALL_DIR/statusline.py" --config
+else
+    echo "  To customize: $PYTHON ~/.claude-statusline/statusline.py"
+    echo ""
+fi
