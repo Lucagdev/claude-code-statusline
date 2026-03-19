@@ -3,7 +3,6 @@
 
 set -e
 
-REPO="https://raw.githubusercontent.com/Lucagdev/claude-code-statusline/main"
 INSTALL_DIR="$HOME/.claude-statusline"
 
 echo ""
@@ -33,9 +32,11 @@ fi
 # Create install dir
 mkdir -p "$INSTALL_DIR"
 
-# Download statusline.py
+# Download statusline.py (use GitHub API to avoid raw.githubusercontent cache)
 echo "  Downloading statusline.py..."
-curl -fsSL "$REPO/statusline.py" -o "$INSTALL_DIR/statusline.py"
+curl -fsSL -H "Accept: application/vnd.github.v3.raw" \
+    "https://api.github.com/repos/Lucagdev/claude-code-statusline/contents/statusline.py" \
+    -o "$INSTALL_DIR/statusline.py"
 chmod +x "$INSTALL_DIR/statusline.py"
 
 # Configure Claude Code settings.json

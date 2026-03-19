@@ -2,7 +2,6 @@
 # Usage: & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Lucagdev/claude-code-statusline/main/install.ps1)))
 $ErrorActionPreference = "Stop"
 
-$repo = "https://raw.githubusercontent.com/Lucagdev/claude-code-statusline/main"
 $installDir = "$env:USERPROFILE\.claude-statusline"
 
 Write-Host ""
@@ -22,9 +21,11 @@ try {
 # Create install dir
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 
-# Download statusline.py
+# Download statusline.py (use GitHub API to avoid raw.githubusercontent cache)
 Write-Host "  Downloading statusline.py..."
-Invoke-WebRequest -Uri "$repo/statusline.py" -OutFile "$installDir\statusline.py"
+Invoke-WebRequest -Uri "https://api.github.com/repos/Lucagdev/claude-code-statusline/contents/statusline.py" `
+    -Headers @{ Accept = "application/vnd.github.v3.raw" } `
+    -OutFile "$installDir\statusline.py"
 
 # Configure Claude Code settings.json
 $claudeSettings = "$env:USERPROFILE\.claude\settings.json"
