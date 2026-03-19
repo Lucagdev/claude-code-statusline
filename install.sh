@@ -40,20 +40,42 @@ chmod +x "$INSTALL_DIR/statusline.py"
 
 # Configure Claude Code settings.json
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
+
+# Convert Git Bash paths (/c/Users/...) to Windows paths (C:/Users/...) for Python
+if [[ "$(uname -s)" == MINGW* ]] || [[ "$(uname -s)" == MSYS* ]]; then
+    PY_SETTINGS=$(cygpath -w "$CLAUDE_SETTINGS" 2>/dev/null || echo "$CLAUDE_SETTINGS")
+    PY_INSTALL_DIR=$(cygpath -w "$INSTALL_DIR" 2>/dev/null || echo "$INSTALL_DIR")
+else
+    PY_SETTINGS="$CLAUDE_SETTINGS"
+    PY_INSTALL_DIR="$INSTALL_DIR"
+fi
+
 if [ -f "$CLAUDE_SETTINGS" ]; then
     # Use Python to safely merge JSON
     $PYTHON -c "
-import json
-with open('$CLAUDE_SETTINGS') as f:
+import json, os
+settings_path = r'$PY_SETTINGS'
+install_dir = r'$PY_INSTALL_DIR'
+with open(settings_path) as f:
     s = json.load(f)
-s['statusLine'] = {'type': 'command', 'command': '$PYTHON $INSTALL_DIR/statusline.py', 'padding': 0}
-with open('$CLAUDE_SETTINGS', 'w') as f:
+cmd = '$PYTHON ' + os.path.join(install_dir, 'statusline.py')
+s['statusLine'] = {'type': 'command', 'command': cmd, 'padding': 0}
+with open(settings_path, 'w') as f:
     json.dump(s, f, indent=2)
     f.write('\n')
 "
 else
     mkdir -p "$HOME/.claude"
-    echo '{"statusLine":{"type":"command","command":"'"$PYTHON"' '"$INSTALL_DIR"'/statusline.py","padding":0}}' | $PYTHON -m json.tool > "$CLAUDE_SETTINGS"
+    $PYTHON -c "
+import json, os
+settings_path = r'$PY_SETTINGS'
+install_dir = r'$PY_INSTALL_DIR'
+cmd = '$PYTHON ' + os.path.join(install_dir, 'statusline.py')
+s = {'statusLine': {'type': 'command', 'command': cmd, 'padding': 0}}
+with open(settings_path, 'w') as f:
+    json.dump(s, f, indent=2)
+    f.write('\n')
+"
 fi
 
 echo ""
