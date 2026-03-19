@@ -84,8 +84,8 @@ echo ""
 echo "  Restart Claude Code to see your statusline."
 echo ""
 
-# Launch interactive configurator if running in a terminal
-# (won't work when piped via curl | bash — stdin is not a TTY)
+# Launch interactive configurator
+# Works when run via: bash <(curl ...) — stdin stays free for TUI
 if [ -t 0 ] && [ -t 1 ]; then
     $PYTHON "$INSTALL_DIR/statusline.py" --config
 else

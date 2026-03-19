@@ -634,14 +634,14 @@
             <div class="terminal">
               <div class="terminal-chrome">
                 <div class="terminal-dot"></div><div class="terminal-dot"></div><div class="terminal-dot"></div>
-                <span class="terminal-label">linux / macos</span>
+                <span class="terminal-label">linux / macos / git bash</span>
               </div>
               <div class="terminal-body">
                 <span class="terminal-prompt">$</span>
-                <code class="terminal-cmd">curl -fsSL https://raw.githubusercontent.com/Lucagdev/claude-code-statusline/main/install.sh | bash</code>
+                <code class="terminal-cmd">bash &lt;(curl -fsSL https://raw.githubusercontent.com/Lucagdev/claude-code-statusline/main/install.sh)</code>
               </div>
               <div class="terminal-actions">
-                <button class="copy-btn" onclick="copyText(this, 'curl -fsSL https://raw.githubusercontent.com/Lucagdev/claude-code-statusline/main/install.sh | bash')">Copy</button>
+                <button class="copy-btn" onclick="copyText(this, 'bash <(curl -fsSL https://raw.githubusercontent.com/Lucagdev/claude-code-statusline/main/install.sh)')">Copy</button>
               </div>
             </div>
             <div class="terminal">
@@ -651,10 +651,10 @@
               </div>
               <div class="terminal-body">
                 <span class="terminal-prompt">PS&gt;</span>
-                <code class="terminal-cmd">irm https://raw.githubusercontent.com/Lucagdev/claude-code-statusline/main/install.ps1 | iex</code>
+                <code class="terminal-cmd">& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Lucagdev/claude-code-statusline/main/install.ps1)))</code>
               </div>
               <div class="terminal-actions">
-                <button class="copy-btn" onclick="copyText(this, 'irm https://raw.githubusercontent.com/Lucagdev/claude-code-statusline/main/install.ps1 | iex')">Copy</button>
+                <button class="copy-btn" onclick="copyText(this, '& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Lucagdev/claude-code-statusline/main/install.ps1)))')">Copy</button>
               </div>
             </div>
           </div>
@@ -667,7 +667,7 @@
           <div class="step-title">Restart Claude Code</div>
         </div>
         <div class="step-hint">
-          Your statusline is ready. Run the builder to customize it to your liking.
+          The interactive builder opens automatically after install. Restart Claude Code when done.
         </div>
       </div>
     </div>
@@ -707,10 +707,10 @@
         </div>
         <div class="terminal-body">
           <span class="terminal-prompt">$</span>
-          <code class="terminal-cmd">python3 ~/.claude-statusline/statusline.py</code>
+          <code class="terminal-cmd">python ~/.claude-statusline/statusline.py</code>
         </div>
         <div class="terminal-actions">
-          <button class="copy-btn" onclick="copyText(this, 'python3 ~/.claude-statusline/statusline.py')">Copy</button>
+          <button class="copy-btn" onclick="copyText(this, 'python ~/.claude-statusline/statusline.py')">Copy</button>
         </div>
       </div>
     </div>
@@ -743,9 +743,9 @@
 
     var os = detectOS();
     var commands = {
-      windows: 'irm https://raw.githubusercontent.com/Lucagdev/claude-code-statusline/main/install.ps1 | iex',
-      macos:   'curl -fsSL https://raw.githubusercontent.com/Lucagdev/claude-code-statusline/main/install.sh | bash',
-      linux:   'curl -fsSL https://raw.githubusercontent.com/Lucagdev/claude-code-statusline/main/install.sh | bash'
+      windows: '& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Lucagdev/claude-code-statusline/main/install.ps1)))',
+      macos:   'bash <(curl -fsSL https://raw.githubusercontent.com/Lucagdev/claude-code-statusline/main/install.sh)',
+      linux:   'bash <(curl -fsSL https://raw.githubusercontent.com/Lucagdev/claude-code-statusline/main/install.sh)'
     };
     var osLabels = { windows: 'windows powershell', macos: 'macos terminal', linux: 'linux terminal' };
     var prompts  = { windows: 'PS>', macos: '$', linux: '$' };

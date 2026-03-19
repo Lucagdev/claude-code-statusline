@@ -6,19 +6,19 @@ Beautiful, customizable statusline for Claude Code CLI.
 
 ## Install
 
-**Linux / macOS / WSL**
+**Linux / macOS / WSL / Git Bash**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Lucagdev/claude-code-statusline/main/install.sh | bash
+bash <(curl -fsSL https://raw.githubusercontent.com/Lucagdev/claude-code-statusline/main/install.sh)
 ```
 
 **Windows (PowerShell)**
 
 ```powershell
-irm https://raw.githubusercontent.com/Lucagdev/claude-code-statusline/main/install.ps1 | iex
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Lucagdev/claude-code-statusline/main/install.ps1)))
 ```
 
-Restart Claude Code after installing.
+Installs and opens the interactive configurator. Restart Claude Code after configuring.
 
 ---
 
@@ -50,7 +50,7 @@ $3.47  │  2h 00m  │  +245 -89
 Run the interactive builder at any time:
 
 ```bash
-python3 ~/.claude-statusline/statusline.py
+python ~/.claude-statusline/statusline.py
 ```
 
 **Builder controls:**
@@ -128,7 +128,7 @@ python3 ~/.claude-statusline/statusline.py
 Switch theme from CLI:
 
 ```bash
-python3 ~/.claude-statusline/statusline.py --theme nord
+python ~/.claude-statusline/statusline.py --theme nord
 ```
 
 ---
@@ -148,7 +148,7 @@ Results are cached for 120 seconds in `$TMPDIR`.
 ## CLI Reference
 
 ```
-python3 statusline.py [OPTIONS]
+python statusline.py [OPTIONS]
 
 Options:
   --config         Open the interactive TUI builder

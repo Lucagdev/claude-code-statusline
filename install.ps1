@@ -1,4 +1,5 @@
 # Claude Code Statusline — Installer for Windows
+# Usage: & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Lucagdev/claude-code-statusline/main/install.ps1)))
 $ErrorActionPreference = "Stop"
 
 $repo = "https://raw.githubusercontent.com/Lucagdev/claude-code-statusline/main"
@@ -44,5 +45,7 @@ Write-Host ""
 Write-Host "  ✓ Installed!" -ForegroundColor Green
 Write-Host ""
 Write-Host "  Restart Claude Code to see your statusline."
-Write-Host "  To configure: python ~/.claude-statusline/statusline.py"
 Write-Host ""
+
+# Launch interactive configurator
+python "$installDir\statusline.py" --config
