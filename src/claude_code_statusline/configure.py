@@ -7,8 +7,12 @@ updates the preview instantly. Full CRUD for widgets with live feedback.
 from __future__ import annotations
 
 import sys
-import tty
-import termios
+
+if sys.platform == "win32":
+    import msvcrt
+else:
+    import tty
+    import termios
 
 from .config import (
     StatuslineConfig, LineConfig, WidgetConfig,
@@ -74,26 +78,41 @@ C = "\033[38;2;137;180;250m"   # cyan
 
 
 def _read_key() -> str:
-    fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
-    try:
-        tty.setraw(fd)
-        ch = sys.stdin.read(1)
+    if sys.platform == "win32":
+        ch = msvcrt.getwch()
+        if ch in ("\x00", "\xe0"):
+            ch2 = msvcrt.getwch()
+            return {"H": "up", "P": "down", "M": "right", "K": "left"}.get(ch2, "")
         if ch == "\x1b":
-            ch2 = sys.stdin.read(1)
-            if ch2 == "[":
-                ch3 = sys.stdin.read(1)
-                return {"A": "up", "B": "down", "C": "right", "D": "left"}.get(ch3, "")
             return "escape"
         if ch in ("\r", "\n"):
             return "enter"
         if ch == "\x03":
             return "quit"
-        if ch == "\x7f":
+        if ch == "\x08":
             return "backspace"
         return ch
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    else:
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            ch = sys.stdin.read(1)
+            if ch == "\x1b":
+                ch2 = sys.stdin.read(1)
+                if ch2 == "[":
+                    ch3 = sys.stdin.read(1)
+                    return {"A": "up", "B": "down", "C": "right", "D": "left"}.get(ch3, "")
+                return "escape"
+            if ch in ("\r", "\n"):
+                return "enter"
+            if ch == "\x03":
+                return "quit"
+            if ch == "\x7f":
+                return "backspace"
+            return ch
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
 # ── Preview renderer ─────────────────────────────────────────────

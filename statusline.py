@@ -1011,33 +1011,48 @@ CLEAR_LINE = "\033[2K"
 
 def _read_key() -> str:
     """Read a single keypress, handling arrow keys."""
-    fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
-    try:
-        tty.setraw(fd)
-        ch = sys.stdin.read(1)
+    if sys.platform == "win32":
+        ch = msvcrt.getwch()
+        if ch in ("\x00", "\xe0"):
+            ch2 = msvcrt.getwch()
+            return {"H": "up", "P": "down", "M": "right", "K": "left"}.get(ch2, "")
         if ch == "\x1b":
-            ch2 = sys.stdin.read(1)
-            if ch2 == "[":
-                ch3 = sys.stdin.read(1)
-                if ch3 == "A":
-                    return "up"
-                elif ch3 == "B":
-                    return "down"
-                elif ch3 == "C":
-                    return "right"
-                elif ch3 == "D":
-                    return "left"
             return "escape"
-        elif ch in ("\r", "\n"):
+        if ch in ("\r", "\n"):
             return "enter"
-        elif ch == "q":
+        if ch == "q":
             return "quit"
-        elif ch == "\x03":  # Ctrl+C
+        if ch == "\x03":
             return "quit"
         return ch
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    else:
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            ch = sys.stdin.read(1)
+            if ch == "\x1b":
+                ch2 = sys.stdin.read(1)
+                if ch2 == "[":
+                    ch3 = sys.stdin.read(1)
+                    if ch3 == "A":
+                        return "up"
+                    elif ch3 == "B":
+                        return "down"
+                    elif ch3 == "C":
+                        return "right"
+                    elif ch3 == "D":
+                        return "left"
+                return "escape"
+            elif ch in ("\r", "\n"):
+                return "enter"
+            elif ch == "q":
+                return "quit"
+            elif ch == "\x03":  # Ctrl+C
+                return "quit"
+            return ch
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
 def _move_up(n: int):
@@ -1289,26 +1304,41 @@ C = "\033[38;2;137;180;250m"   # cyan
 
 
 def _read_key() -> str:
-    fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
-    try:
-        tty.setraw(fd)
-        ch = sys.stdin.read(1)
+    if sys.platform == "win32":
+        ch = msvcrt.getwch()
+        if ch in ("\x00", "\xe0"):
+            ch2 = msvcrt.getwch()
+            return {"H": "up", "P": "down", "M": "right", "K": "left"}.get(ch2, "")
         if ch == "\x1b":
-            ch2 = sys.stdin.read(1)
-            if ch2 == "[":
-                ch3 = sys.stdin.read(1)
-                return {"A": "up", "B": "down", "C": "right", "D": "left"}.get(ch3, "")
             return "escape"
         if ch in ("\r", "\n"):
             return "enter"
         if ch == "\x03":
             return "quit"
-        if ch == "\x7f":
+        if ch == "\x08":
             return "backspace"
         return ch
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    else:
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            ch = sys.stdin.read(1)
+            if ch == "\x1b":
+                ch2 = sys.stdin.read(1)
+                if ch2 == "[":
+                    ch3 = sys.stdin.read(1)
+                    return {"A": "up", "B": "down", "C": "right", "D": "left"}.get(ch3, "")
+                return "escape"
+            if ch in ("\r", "\n"):
+                return "enter"
+            if ch == "\x03":
+                return "quit"
+            if ch == "\x7f":
+                return "backspace"
+            return ch
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
 # ── Preview renderer ─────────────────────────────────────────────

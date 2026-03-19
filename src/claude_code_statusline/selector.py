@@ -7,8 +7,12 @@ and calls a callback on each move for live preview.
 from __future__ import annotations
 
 import sys
-import tty
-import termios
+
+if sys.platform == "win32":
+    import msvcrt
+else:
+    import tty
+    import termios
 
 
 RESET = "\033[0m"
@@ -21,33 +25,48 @@ CLEAR_LINE = "\033[2K"
 
 def _read_key() -> str:
     """Read a single keypress, handling arrow keys."""
-    fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
-    try:
-        tty.setraw(fd)
-        ch = sys.stdin.read(1)
+    if sys.platform == "win32":
+        ch = msvcrt.getwch()
+        if ch in ("\x00", "\xe0"):
+            ch2 = msvcrt.getwch()
+            return {"H": "up", "P": "down", "M": "right", "K": "left"}.get(ch2, "")
         if ch == "\x1b":
-            ch2 = sys.stdin.read(1)
-            if ch2 == "[":
-                ch3 = sys.stdin.read(1)
-                if ch3 == "A":
-                    return "up"
-                elif ch3 == "B":
-                    return "down"
-                elif ch3 == "C":
-                    return "right"
-                elif ch3 == "D":
-                    return "left"
             return "escape"
-        elif ch in ("\r", "\n"):
+        if ch in ("\r", "\n"):
             return "enter"
-        elif ch == "q":
+        if ch == "q":
             return "quit"
-        elif ch == "\x03":  # Ctrl+C
+        if ch == "\x03":
             return "quit"
         return ch
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    else:
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            ch = sys.stdin.read(1)
+            if ch == "\x1b":
+                ch2 = sys.stdin.read(1)
+                if ch2 == "[":
+                    ch3 = sys.stdin.read(1)
+                    if ch3 == "A":
+                        return "up"
+                    elif ch3 == "B":
+                        return "down"
+                    elif ch3 == "C":
+                        return "right"
+                    elif ch3 == "D":
+                        return "left"
+                return "escape"
+            elif ch in ("\r", "\n"):
+                return "enter"
+            elif ch == "q":
+                return "quit"
+            elif ch == "\x03":  # Ctrl+C
+                return "quit"
+            return ch
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
 def _move_up(n: int):
