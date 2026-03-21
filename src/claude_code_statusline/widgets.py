@@ -458,16 +458,58 @@ def _format_widget_inner(widget_id: str, data: dict, theme) -> str | None:
 _usage_cache = None
 
 def _get_usage_data(data: dict):
-    """Get usage data (cached per render cycle)."""
+    """Get usage data (cached per render cycle).
+
+    Since Claude Code 2.1.80, rate_limits is included in the stdin payload.
+    Falls back to HTTP API for older versions.
+    """
     global _usage_cache
     if _usage_cache is not None:
         return _usage_cache
+
+    # Try native rate_limits from payload (CC 2.1.80+)
+    rate_limits = data.get("rate_limits")
+    if rate_limits:
+        _usage_cache = _parse_rate_limits(rate_limits)
+        if _usage_cache is not None:
+            return _usage_cache
+
+    # Fallback: HTTP API (CC < 2.1.80)
     try:
         from .usage import get_usage
         _usage_cache = get_usage()
     except Exception:
         _usage_cache = None
     return _usage_cache
+
+
+def _parse_rate_limits(rate_limits: dict):
+    """Parse rate_limits from Claude Code 2.1.80+ stdin payload."""
+    from .usage import UsageData, UsageWindow, _time_until
+    try:
+        five_h = rate_limits.get("five_hour") or rate_limits.get("5h")
+        seven_d = rate_limits.get("seven_day") or rate_limits.get("7d")
+        return UsageData(
+            five_hour=_parse_rate_limit_window(five_h) if five_h else None,
+            seven_day=_parse_rate_limit_window(seven_d) if seven_d else None,
+        )
+    except Exception:
+        return None
+
+
+def _parse_rate_limit_window(window: dict):
+    """Parse a single rate limit window. resets_at can be Unix timestamp or ISO string."""
+    import time
+    from .usage import UsageWindow, _time_until
+    pct = round(window.get("used_percentage", 0))
+    resets_at = window.get("resets_at")
+    if isinstance(resets_at, (int, float)):
+        reset_secs = max(0, int(resets_at - time.time()))
+    elif isinstance(resets_at, str):
+        reset_secs = _time_until(resets_at)
+    else:
+        reset_secs = 0
+    return UsageWindow(utilization_pct=pct, reset_seconds=reset_secs)
 
 
 def reset_usage_cache():
