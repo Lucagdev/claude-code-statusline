@@ -288,7 +288,7 @@ def install_to_claude(command: str = "") -> None:
 
 Token resolution order:
 1. CLAUDE_CODE_OAUTH_TOKEN env var
-2. ~/.claude/.credentials.json → claudeAiOauth.accessToken
+2. $CLAUDE_CONFIG_DIR/.credentials.json (or ~/.claude/) → claudeAiOauth.accessToken
 3. ~/.bar/tokens.json (if allthingsclaude/bar is installed)
 
 Results are cached for 30 seconds in a temp file.
@@ -298,7 +298,16 @@ Results are cached for 30 seconds in a temp file.
 
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 CACHE_TTL = 120  # seconds — avoid rate limiting
-CACHE_FILE = Path(tempfile.gettempdir()) / "claude-statusline-usage-cache.json"
+
+
+def _config_base() -> Path:
+    """Claude config dir — honors CLAUDE_CONFIG_DIR for multi-account setups."""
+    cfg = os.environ.get("CLAUDE_CONFIG_DIR")
+    return Path(cfg).expanduser() if cfg else Path.home() / ".claude"
+
+
+# Cache is per-config-dir so multiple accounts don't share usage data.
+CACHE_FILE = Path(tempfile.gettempdir()) / f"claude-statusline-usage-cache-{_config_base().name}.json"
 
 
 @dataclass
@@ -345,8 +354,8 @@ def _resolve_token() -> str | None:
     if token:
         return token
 
-    # 2. Claude Code credentials
-    creds_path = Path.home() / ".claude" / ".credentials.json"
+    # 2. Claude Code credentials (honors CLAUDE_CONFIG_DIR)
+    creds_path = _config_base() / ".credentials.json"
     if creds_path.exists():
         try:
             creds = json.loads(creds_path.read_text())
